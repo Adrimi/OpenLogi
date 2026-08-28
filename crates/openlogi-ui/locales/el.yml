@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Αύξηση έντασης"
 "Volume Down": "Μείωση έντασης"
 "Mute": "Σίγαση"
+"Brightness Up": "Αύξηση φωτεινότητας"
+"Brightness Down": "Μείωση φωτεινότητας"
 "Cycle DPI Presets": "Εναλλαγή προεπιλογών DPI"
 "Toggle SmartShift": "Εναλλαγή SmartShift"
 "Scroll Up": "Κύλιση προς τα πάνω"

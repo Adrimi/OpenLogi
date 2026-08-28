@@ -33,6 +33,8 @@ const MOMENTUM_PHASE: u32 = 123; // kCGScrollWheelEventMomentumPhase
 // NX_KEYTYPE_* constants from <IOKit/hidsystem/ev_keymap.h>.
 const NX_KEYTYPE_SOUND_UP: i32 = 0;
 const NX_KEYTYPE_SOUND_DOWN: i32 = 1;
+const NX_KEYTYPE_BRIGHTNESS_UP: i32 = 2;
+const NX_KEYTYPE_BRIGHTNESS_DOWN: i32 = 3;
 const NX_KEYTYPE_MUTE: i32 = 7;
 const NX_KEYTYPE_PLAY: i32 = 16;
 const NX_KEYTYPE_NEXT: i32 = 17;
@@ -155,6 +157,8 @@ fn nx_key(key: MediaKey) -> i32 {
         MediaKey::VolumeUp => NX_KEYTYPE_SOUND_UP,
         MediaKey::VolumeDown => NX_KEYTYPE_SOUND_DOWN,
         MediaKey::Mute => NX_KEYTYPE_MUTE,
+        MediaKey::BrightnessUp => NX_KEYTYPE_BRIGHTNESS_UP,
+        MediaKey::BrightnessDown => NX_KEYTYPE_BRIGHTNESS_DOWN,
     }
 }
 
@@ -431,9 +435,12 @@ fn hid_usage_to_macos(usage: u8) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use core_graphics::event::CGEventFlags;
-    use openlogi_core::binding::Shortcut;
+    use openlogi_core::binding::{MediaKey, Shortcut};
 
-    use super::{combo, held_key_event, hid_usage_to_macos};
+    use super::{
+        NX_KEYTYPE_BRIGHTNESS_DOWN, NX_KEYTYPE_BRIGHTNESS_UP, combo, held_key_event,
+        hid_usage_to_macos, nx_key,
+    };
     use crate::inject::{HeldKey, HeldModifiers, KeyPhase};
 
     #[test]
@@ -444,6 +451,12 @@ mod tests {
         assert_eq!(hid_usage_to_macos(0x3a), Some(0x7a));
         assert_eq!(hid_usage_to_macos(0x6f), Some(0x5a));
         assert_eq!(hid_usage_to_macos(0xff), None);
+    }
+
+    #[test]
+    fn display_brightness_maps_to_native_system_keys() {
+        assert_eq!(nx_key(MediaKey::BrightnessUp), NX_KEYTYPE_BRIGHTNESS_UP);
+        assert_eq!(nx_key(MediaKey::BrightnessDown), NX_KEYTYPE_BRIGHTNESS_DOWN);
     }
 
     /// Pin a handful of representative `Shortcut -> KeyCombo` rows so an

@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Aumentar volume"
 "Volume Down": "Diminuir volume"
 "Mute": "Silenciar"
+"Brightness Up": "Aumentar brilho"
+"Brightness Down": "Diminuir brilho"
 "Cycle DPI Presets": "Percorrer predefinições de DPI"
 "Toggle SmartShift": "Alternar SmartShift"
 "Scroll Up": "Deslocar para cima"

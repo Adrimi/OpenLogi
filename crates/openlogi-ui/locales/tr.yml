@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Sesi Artır"
 "Volume Down": "Sesi Azalt"
 "Mute": "Sessize Al"
+"Brightness Up": "Parlaklığı Artır"
+"Brightness Down": "Parlaklığı Azalt"
 "Cycle DPI Presets": "DPI Ön Ayarlarında Gez"
 "Toggle SmartShift": "SmartShift'i Aç/Kapat"
 "Scroll Up": "Yukarı Kaydır"

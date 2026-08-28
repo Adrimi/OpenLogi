@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Volume Up"
 "Volume Down": "Volume Down"
 "Mute": "Mute"
+"Brightness Up": "Brightness Up"
+"Brightness Down": "Brightness Down"
 "Cycle DPI Presets": "Cycle DPI Presets"
 "Toggle SmartShift": "Toggle SmartShift"
 "Scroll Up": "Scroll Up"

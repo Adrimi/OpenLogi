@@ -157,6 +157,9 @@ fn dispatch_media(key: MediaKey) {
         MediaKey::VolumeUp => post_key(VK_VOLUME_UP, &[]),
         MediaKey::VolumeDown => post_key(VK_VOLUME_DOWN, &[]),
         MediaKey::Mute => post_key(VK_VOLUME_MUTE, &[]),
+        MediaKey::BrightnessUp | MediaKey::BrightnessDown => {
+            tracing::debug!("Display brightness has no Windows synthesis yet — action skipped");
+        }
     }
 }
 

@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "增大音量"
 "Volume Down": "减小音量"
 "Mute": "静音"
+"Brightness Up": "提高亮度"
+"Brightness Down": "降低亮度"
 "Cycle DPI Presets": "循环灵敏度预设"
 "Toggle SmartShift": "切换 SmartShift"
 "Scroll Up": "向上滚动"

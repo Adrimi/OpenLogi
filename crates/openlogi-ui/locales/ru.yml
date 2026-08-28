@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Увеличить громкость"
 "Volume Down": "Уменьшить громкость"
 "Mute": "Выключить звук"
+"Brightness Up": "Увеличить яркость"
+"Brightness Down": "Уменьшить яркость"
 "Cycle DPI Presets": "Переключать пресеты DPI"
 "Toggle SmartShift": "Переключить SmartShift"
 "Scroll Up": "Прокрутить вверх"

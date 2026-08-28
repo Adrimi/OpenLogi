@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Гучніше"
 "Volume Down": "Тихіше"
 "Mute": "Вимкнути звук"
+"Brightness Up": "Збільшити яскравість"
+"Brightness Down": "Зменшити яскравість"
 "Cycle DPI Presets": "Перемикати пресети DPI"
 "Toggle SmartShift": "Перемкнути SmartShift"
 "Scroll Up": "Прокрутити вгору"

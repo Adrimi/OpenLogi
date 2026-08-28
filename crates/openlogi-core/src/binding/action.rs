@@ -187,6 +187,10 @@ pub enum Action {
     /// cancellation and shutdown. Dispatchers without a release context must
     /// degrade this action to a balanced tap rather than leave keys held.
     HoldShortcut(KeyCombo),
+    /// Increase the primary display brightness.
+    BrightnessUp,
+    /// Decrease the primary display brightness.
+    BrightnessDown,
 }
 
 /// One step in a [`Action::Workflow`]. A workflow is a `Vec<WorkflowStep>`
@@ -277,6 +281,8 @@ macro_rules! for_each_unit_action {
             VolumeUp "Volume Up" Media Volume,
             VolumeDown "Volume Down" Media VolumeDown,
             MuteVolume "Mute" Media Mute,
+            BrightnessUp "Brightness Up" Media Monitor,
+            BrightnessDown "Brightness Down" Media Monitor,
             // DPI
             CycleDpiPresets "Cycle DPI Presets" Dpi Gauge,
             ToggleSmartShift "Toggle SmartShift" Dpi Refresh,

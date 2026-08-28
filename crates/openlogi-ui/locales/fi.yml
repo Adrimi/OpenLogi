@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Lisää äänenvoimakkuutta"
 "Volume Down": "Vähennä äänenvoimakkuutta"
 "Mute": "Mykistä"
+"Brightness Up": "Lisää kirkkautta"
+"Brightness Down": "Vähennä kirkkautta"
 "Cycle DPI Presets": "Selaa DPI-esiasetuksia"
 "Toggle SmartShift": "Vaihda SmartShift"
 "Scroll Up": "Vieritä ylös"

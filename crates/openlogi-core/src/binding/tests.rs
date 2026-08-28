@@ -327,6 +327,8 @@ fn persisted_action_variant_names_are_stable() {
         "AppExpose",
         "BrowserBack",
         "BrowserForward",
+        "BrightnessDown",
+        "BrightnessUp",
         "CaptureRegion",
         "CloseTab",
         "Copy",
@@ -434,6 +436,20 @@ fn category_media_variants() {
     assert_eq!(Action::VolumeUp.category(), Category::Media);
     assert_eq!(Action::VolumeDown.category(), Category::Media);
     assert_eq!(Action::MuteVolume.category(), Category::Media);
+    assert_eq!(Action::BrightnessUp.category(), Category::Media);
+    assert_eq!(Action::BrightnessDown.category(), Category::Media);
+}
+
+#[test]
+fn display_brightness_actions_use_media_effects() {
+    assert_matches!(
+        Action::BrightnessUp.effect(),
+        Effect::Media(MediaKey::BrightnessUp)
+    );
+    assert_matches!(
+        Action::BrightnessDown.effect(),
+        Effect::Media(MediaKey::BrightnessDown)
+    );
 }
 
 #[test]

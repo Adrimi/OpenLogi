@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "볼륨 높이기"
 "Volume Down": "볼륨 낮추기"
 "Mute": "음소거"
+"Brightness Up": "밝기 높이기"
+"Brightness Down": "밝기 낮추기"
 "Cycle DPI Presets": "DPI 프리셋 순환"
 "Toggle SmartShift": "SmartShift 전환"
 "Scroll Up": "위로 스크롤"

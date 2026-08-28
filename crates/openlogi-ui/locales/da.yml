@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Skru op"
 "Volume Down": "Skru ned"
 "Mute": "Slå lyd fra"
+"Brightness Up": "Skru op for lysstyrken"
+"Brightness Down": "Skru ned for lysstyrken"
 "Cycle DPI Presets": "Skift mellem DPI-forindstillinger"
 "Toggle SmartShift": "Slå SmartShift til/fra"
 "Scroll Up": "Rul op"

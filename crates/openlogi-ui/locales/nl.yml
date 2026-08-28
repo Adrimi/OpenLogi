@@ -241,6 +241,8 @@ _version: 1
 "Volume Up": "Volume omhoog"
 "Volume Down": "Volume omlaag"
 "Mute": "Geluid uit"
+"Brightness Up": "Helderheid verhogen"
+"Brightness Down": "Helderheid verlagen"
 "Cycle DPI Presets": "Door DPI-voorinstellingen bladeren"
 "Toggle SmartShift": "SmartShift wisselen"
 "Scroll Up": "Omhoog scrollen"
