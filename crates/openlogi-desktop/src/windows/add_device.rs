@@ -29,7 +29,7 @@ use openlogi_ipc::{FoundDevice, PairingFailure, PairingPhase};
 
 use crate::app::menu::{CloseWindow, Minimize, Zoom};
 use crate::services::ipc::Command;
-use crate::state::AppState;
+use crate::state::{AppState, StateEvent};
 use crate::ui::theme::{self, Palette, Typography as _};
 use crate::windows::{self, AuxWindow};
 
@@ -56,16 +56,29 @@ pub enum PairingUi {
 
 impl Global for PairingUi {}
 
+impl PairingUi {
+    fn is_active(&self) -> bool {
+        matches!(
+            self,
+            Self::Searching | Self::Found(_) | Self::Pairing | Self::Passkey(_)
+        )
+    }
+}
+
+fn input_monitoring_missing(cx: &App) -> bool {
+    cfg!(target_os = "macos")
+        && AppState::try_read(cx)
+            .and_then(AppState::agent_status)
+            .is_some_and(|status| !status.input_monitoring_granted)
+}
+
 /// Open the Add Device window, starting a fresh search unless one is already
 /// in flight (re-opening just focuses the existing window).
 pub fn open(cx: &mut App) {
-    let active = matches!(
-        cx.try_global::<PairingUi>(),
-        Some(
-            PairingUi::Searching | PairingUi::Found(_) | PairingUi::Pairing | PairingUi::Passkey(_)
-        )
-    );
-    if !active {
+    let active = cx
+        .try_global::<PairingUi>()
+        .is_some_and(PairingUi::is_active);
+    if !active && !input_monitoring_missing(cx) {
         start_search(cx);
     }
     windows::open_or_focus(
@@ -165,6 +178,7 @@ pub struct AddDeviceView {
     appearance_obs: Option<Subscription>,
     #[expect(dead_code, reason = "held to keep the PairingUi observer alive")]
     state_obs: Subscription,
+    _agent_obs: Subscription,
 }
 
 impl AddDeviceView {
@@ -172,10 +186,16 @@ impl AddDeviceView {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
         let state_obs = cx.observe_global::<PairingUi>(|_, cx| cx.notify());
+        let agent_obs = cx.subscribe(&AppState::global(cx), |_, _, event: &StateEvent, cx| {
+            if matches!(event, StateEvent::AgentChanged) {
+                cx.notify();
+            }
+        });
         Self {
             focus_handle,
             appearance_obs: None,
             state_obs,
+            _agent_obs: agent_obs,
         }
     }
 }
@@ -191,6 +211,7 @@ impl Render for AddDeviceView {
         theme::apply_ui_scale(window, cx);
         let pal = theme::palette(cx);
         let state = cx.try_global::<PairingUi>().cloned().unwrap_or_default();
+        let input_monitoring_missing = input_monitoring_missing(cx);
 
         v_flex()
             .size_full()
@@ -217,7 +238,10 @@ impl Render for AddDeviceView {
                             .text_heading()
                             .child(tr!("Add Device")),
                     )
-                    .child(AddDeviceBody { state }),
+                    .child(AddDeviceBody {
+                        state,
+                        input_monitoring_missing,
+                    }),
             )
     }
 }
@@ -226,17 +250,26 @@ impl Render for AddDeviceView {
 #[derive(IntoElement)]
 struct AddDeviceBody {
     state: PairingUi,
+    input_monitoring_missing: bool,
 }
 
 impl RenderOnce for AddDeviceBody {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let pal = theme::palette(cx);
-        pairing_body(self.state, pal)
+        pairing_body(self.state, self.input_monitoring_missing, pal)
     }
 }
 
-fn pairing_body(state: PairingUi, pal: Palette) -> impl IntoElement {
+fn pairing_body(
+    state: PairingUi,
+    input_monitoring_missing: bool,
+    pal: Palette,
+) -> impl IntoElement {
     let mut col = v_flex().w_full().flex_1().gap_4();
+    if input_monitoring_missing {
+        let pairing_active = state.is_active();
+        return col.child(input_monitoring_body(pairing_active, pal));
+    }
     match state {
         PairingUi::Idle => {
             col = col
@@ -326,6 +359,41 @@ fn pairing_body(state: PairingUi, pal: Palette) -> impl IntoElement {
         }
     }
     col
+}
+
+fn input_monitoring_body(pairing_active: bool, pal: Palette) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .gap_4()
+        .child(
+            div()
+                .text_color(pal.text_primary)
+                .font_weight(FontWeight::MEDIUM)
+                .child(tr!("Input Monitoring permission required")),
+        )
+        .child(hint(
+            tr!(
+                "Enable “OpenLogi Agent” in the Input Monitoring list — the background agent owns device access, not the OpenLogi app."
+            ),
+            pal,
+        ))
+        .child(
+            action_button(
+                "ad-open-input-monitoring",
+                tr!("Open System Settings to grant access"),
+                true,
+            )
+            .on_click(|_, _, cx| crate::app::request_input_monitoring(cx)),
+        )
+        .child(
+            action_button(
+                "ad-restart-after-input-monitoring",
+                tr!("I’ve granted access — continue"),
+                false,
+            )
+            .on_click(|_, _, cx| crate::app::restart_after_input_monitoring_change(cx)),
+        )
+        .when(pairing_active, |this| this.child(cancel_button()))
 }
 
 /// A discovered-device row; clicking it pairs with that device.
@@ -441,4 +509,17 @@ fn action_button(id: &'static str, label: impl Into<SharedString>, primary: bool
 fn cancel_button() -> impl IntoElement {
     action_button("ad-cancel", tr!("Cancel"), false)
         .on_click(|_, _, cx| send(cx, Command::CancelPairing))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PairingUi;
+
+    #[test]
+    fn permission_gate_keeps_cancel_for_active_pairing() {
+        assert!(PairingUi::Searching.is_active());
+        assert!(PairingUi::Pairing.is_active());
+        assert!(!PairingUi::Idle.is_active());
+        assert!(!PairingUi::Paired { slot: 1 }.is_active());
+    }
 }

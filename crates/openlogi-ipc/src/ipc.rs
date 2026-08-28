@@ -61,7 +61,9 @@ pub use succession::Identity;
 /// v28: `Action::HoldShortcut` appended for lifecycle-held keyboard output.
 /// v29: `Agent::declare_client` + [`ClientKind`] appended — typed demand for
 ///      the macOS dormancy gate.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// v30: [`Agent::restart_after_input_monitoring_change`] appended.
+/// v31: [`Agent::request_input_monitoring_access`] appended.
+pub const PROTOCOL_VERSION: u32 = 31;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to
@@ -560,4 +562,17 @@ pub trait Agent {
     /// arms only on [`ClientKind::Gui`]. The takeover probe never declares —
     /// it speaks only [`Agent::protocol_version`] — and so never arms.
     async fn declare_client(kind: ClientKind);
+    /// Restart the agent after the user changes Input Monitoring in System
+    /// Settings, so macOS applies the new TCC decision to device opens.
+    ///
+    /// The GUI calls this only on macOS. Other platforms accept it as a no-op
+    /// so the IPC contract stays portable.
+    async fn restart_after_input_monitoring_change();
+    /// Ask the agent to request Input Monitoring from macOS, so TCC attributes
+    /// the prompt and Settings row to the helper that actually opens HID
+    /// devices rather than to the GUI.
+    ///
+    /// The GUI calls this only on macOS. Other platforms accept it as a no-op
+    /// so the IPC contract stays portable.
+    async fn request_input_monitoring_access();
 }

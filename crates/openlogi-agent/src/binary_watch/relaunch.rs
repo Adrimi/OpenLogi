@@ -16,7 +16,7 @@
 //! - **Windows** has no `exec` at all: it exits and lets the GUI's socket-down
 //!   spawn (or the next login) start the replacement.
 //!
-//! The macOS path also serves the Input Monitoring grant, which needs the same
+//! The macOS path also serves an Input Monitoring change, which needs the same
 //! "leave and come back" move for an unrelated reason.
 
 use std::path::Path;
@@ -64,24 +64,24 @@ pub(super) fn restart(path: &Path) {
     }
 }
 
-/// Relaunch the macOS agent after Input Monitoring is granted.
+/// Relaunch the macOS agent after Input Monitoring changes.
 ///
-/// macOS does not apply a new Input Monitoring grant to the running process.
+/// macOS does not apply a new Input Monitoring decision to the running process.
 /// The successor starts only after this process exits and releases its
 /// singleton lock and IPC socket. If the relaunch cannot be scheduled, the
 /// current process stays alive so the user can restart it manually.
 #[cfg(target_os = "macos")]
-pub fn relaunch_after_input_monitoring_grant() {
+pub fn restart_after_input_monitoring_change() {
     let path = match std::env::current_exe() {
         Ok(path) => path,
         Err(e) => {
-            warn!(error = %e, "could not resolve own executable after Input Monitoring was granted — restart the agent manually");
+            warn!(error = %e, "could not resolve own executable after Input Monitoring changed — restart the agent manually");
             return;
         }
     };
-    info!("Input Monitoring granted — relaunching the macOS agent");
+    info!("Input Monitoring changed — relaunching the macOS agent");
     if let Err(e) = schedule_macos_relaunch_and_exit(&path) {
-        warn!(error = %e, "could not schedule agent relaunch after Input Monitoring was granted — restart the agent manually");
+        warn!(error = %e, "could not schedule agent relaunch after Input Monitoring changed — restart the agent manually");
     }
 }
 

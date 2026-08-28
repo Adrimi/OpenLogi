@@ -490,3 +490,8 @@ _version: 1
 "OpenLogi": "OpenLogi"
 "Search actions…": "Search actions…"
 "Workflow · %{key}": "Workflow · %{key}"
+"Input Monitoring permission required": "Wymagane uprawnienie „Monitorowanie wejścia”"
+"OpenLogi needs Input Monitoring to discover, pair, and configure Logitech devices.": "OpenLogi potrzebuje uprawnienia „Monitorowanie wejścia”, aby wykrywać, parować i konfigurować urządzenia Logitech."
+"Enable “OpenLogi Agent” in the Input Monitoring list — the background agent owns device access, not the OpenLogi app.": "Włącz „OpenLogi Agent” na liście „Monitorowanie wejścia” — to agent działający w tle uzyskuje dostęp do urządzeń, a nie aplikacja OpenLogi."
+"I’ve granted access — continue": "Przyznano dostęp — kontynuuj"
+"The background agent restarts once, then OpenLogi continues automatically.": "Agent działający w tle uruchomi się ponownie, a OpenLogi automatycznie wznowi działanie."

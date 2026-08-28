@@ -441,6 +441,62 @@ impl AppView {
                     })),
             )
     }
+
+    #[cfg(target_os = "macos")]
+    fn input_monitoring_gate(cx: &mut Context<Self>) -> impl IntoElement {
+        let pal = theme::palette(cx);
+        v_flex()
+            .size_full()
+            .bg(pal.page)
+            .text_color(pal.text_primary)
+            .items_center()
+            .justify_center()
+            .gap_4()
+            .p_8()
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .size_8()
+                    .text_color(rgb(theme::STATUS_CONNECTING)),
+            )
+            .child(
+                div()
+                    .text_title()
+                    .child(tr!("Input Monitoring permission required")),
+            )
+            .child(
+                div()
+                    .max_w(ContentWidth::Narrow.rems())
+                    .text_body()
+                    .text_color(pal.text_muted)
+                    .child(tr!(
+                        "OpenLogi needs Input Monitoring to discover, pair, and configure Logitech devices."
+                    )),
+            )
+            .child(
+                div()
+                    .max_w(ContentWidth::Narrow.rems())
+                    .text_body()
+                    .text_color(pal.text_muted)
+                    .child(tr!(
+                        "Enable “OpenLogi Agent” in the Input Monitoring list — the background agent owns device access, not the OpenLogi app."
+                    )),
+            )
+            .child(
+                Button::new("open-input-monitoring")
+                    .primary()
+                    .icon(IconName::Settings)
+                    .label(tr!("Open System Settings to grant access"))
+                    .on_click(|_, _, cx| request_input_monitoring(cx)),
+            )
+            .child(
+                Button::new("restart-after-input-monitoring")
+                    .label(tr!("I’ve granted access — continue"))
+                    .on_click(|_, _, cx| restart_after_input_monitoring_change(cx)),
+            )
+            .child(div().text_caption().text_color(pal.text_muted).child(tr!(
+                "The background agent restarts once, then OpenLogi continues automatically."
+            )))
+    }
 }
 
 fn request_accessibility(cx: &mut App) {
@@ -453,6 +509,22 @@ fn request_accessibility(cx: &mut App) {
         state.read(cx).request_accessibility_prompt();
     }
     permissions::open_pane(Permission::Accessibility);
+}
+
+pub(crate) fn request_input_monitoring(cx: &mut App) {
+    use openlogi_permissions::{self as permissions, Permission};
+    // Only the agent may request this permission: it owns HID access, and TCC
+    // attributes the resulting prompt and Settings row to the caller.
+    if let Some(state) = AppState::try_global(cx) {
+        state.read(cx).request_input_monitoring_access();
+    }
+    permissions::open_pane(Permission::InputMonitoring);
+}
+
+pub(crate) fn restart_after_input_monitoring_change(cx: &mut App) {
+    if let Some(state) = AppState::try_global(cx) {
+        state.read(cx).restart_after_input_monitoring_change();
+    }
 }
 
 /// Client-side main-window titlebar: window controls (minimize / maximize /
@@ -543,6 +615,14 @@ impl Render for AppView {
             }
             AgentLink::Ready(status) => status,
         };
+
+        #[cfg(target_os = "macos")]
+        if !status.input_monitoring_granted {
+            window.set_window_title("OpenLogi");
+            return root
+                .child(Self::input_monitoring_gate(cx))
+                .into_any_element();
+        }
 
         let granted = status.accessibility_granted;
         if !granted && !self.accessibility_dismissed {
