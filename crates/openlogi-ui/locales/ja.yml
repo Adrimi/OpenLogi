@@ -243,6 +243,8 @@ _version: 1
 "Mute": "ミュート"
 "Brightness Up": "明るさを上げる"
 "Brightness Down": "明るさを下げる"
+"Keyboard Backlight Up": "キーボードバックライトを上げる"
+"Keyboard Backlight Down": "キーボードバックライトを下げる"
 "Cycle DPI Presets": "DPI プリセットを循環"
 "Toggle SmartShift": "SmartShift を切り替え"
 "Scroll Up": "上にスクロール"

@@ -30,7 +30,7 @@ pub mod write;
 pub use backend::{
     BackendError, HidBackend, HotplugEvent, HotplugStream, NodeId, NodeInfo, RawWriter,
 };
-pub use backlight::{BacklightMode, BacklightState, BacklightStatus};
+pub use backlight::{BacklightMode, BacklightState, BacklightStatus, BacklightStep};
 pub use channel::route::{
     DIRECT_DEVICE_INDEX, DeviceRoute, LOGITECH_VENDOR_ID, RECEIVERS, ReceiverBrand,
     ReceiverDescriptor, ReceiverProtocol, find_receiver, receiver_display_name,
@@ -69,5 +69,5 @@ pub use write::{
     set_keyboard_color_with, set_keyboard_color_with_on, set_scroll_inversion,
     set_scroll_inversion_on, set_scroll_resolution, set_scroll_resolution_on,
     set_scroll_wheel_mode, set_scroll_wheel_mode_on, set_smartshift, set_smartshift_on,
-    set_smartshift_sensitivity, toggle_smartshift, toggle_smartshift_on,
+    set_smartshift_sensitivity, step_backlight_on, toggle_smartshift, toggle_smartshift_on,
 };

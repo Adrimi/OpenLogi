@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Silenciar"
 "Brightness Up": "Aumentar brilho"
 "Brightness Down": "Diminuir brilho"
+"Keyboard Backlight Up": "Aumentar luz do teclado"
+"Keyboard Backlight Down": "Diminuir luz do teclado"
 "Cycle DPI Presets": "Alternar Predefinições de DPI"
 "Toggle SmartShift": "Alternar SmartShift"
 "Scroll Up": "Rolar para Cima"

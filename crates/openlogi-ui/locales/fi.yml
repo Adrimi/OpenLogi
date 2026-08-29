@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Mykistä"
 "Brightness Up": "Lisää kirkkautta"
 "Brightness Down": "Vähennä kirkkautta"
+"Keyboard Backlight Up": "Lisää näppäimistön taustavaloa"
+"Keyboard Backlight Down": "Vähennä näppäimistön taustavaloa"
 "Cycle DPI Presets": "Selaa DPI-esiasetuksia"
 "Toggle SmartShift": "Vaihda SmartShift"
 "Scroll Up": "Vieritä ylös"

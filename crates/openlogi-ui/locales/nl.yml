@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Geluid uit"
 "Brightness Up": "Helderheid verhogen"
 "Brightness Down": "Helderheid verlagen"
+"Keyboard Backlight Up": "Toetsenbordverlichting hoger"
+"Keyboard Backlight Down": "Toetsenbordverlichting lager"
 "Cycle DPI Presets": "Door DPI-voorinstellingen bladeren"
 "Toggle SmartShift": "SmartShift wisselen"
 "Scroll Up": "Omhoog scrollen"

@@ -339,6 +339,8 @@ fn persisted_action_variant_names_are_stable() {
         "HorizontalScrollLeft",
         "HorizontalScrollRight",
         "HoldShortcut",
+        "KeyboardBacklightDown",
+        "KeyboardBacklightUp",
         "LaunchpadShow",
         "LeftClick",
         "LockScreen",
@@ -450,6 +452,17 @@ fn display_brightness_actions_use_media_effects() {
         Action::BrightnessDown.effect(),
         Effect::Media(MediaKey::BrightnessDown)
     );
+}
+
+#[test]
+fn keyboard_backlight_actions_are_written_by_the_agent_not_injected() {
+    // The keyboard's own backlight has no system key to synthesize: it is a
+    // HID++ `0x1982` write to the device. Classifying it as a media key would
+    // hand it to the injector, which would silently do nothing.
+    assert_matches!(Action::KeyboardBacklightUp.effect(), Effect::AgentSide);
+    assert_matches!(Action::KeyboardBacklightDown.effect(), Effect::AgentSide);
+    assert_eq!(Action::KeyboardBacklightUp.category(), Category::Media);
+    assert_eq!(Action::KeyboardBacklightDown.category(), Category::Media);
 }
 
 #[test]

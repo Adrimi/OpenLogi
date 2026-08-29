@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Slå lyd fra"
 "Brightness Up": "Skru op for lysstyrken"
 "Brightness Down": "Skru ned for lysstyrken"
+"Keyboard Backlight Up": "Øg tastaturbelysningen"
+"Keyboard Backlight Down": "Sænk tastaturbelysningen"
 "Cycle DPI Presets": "Skift mellem DPI-forindstillinger"
 "Toggle SmartShift": "Slå SmartShift til/fra"
 "Scroll Up": "Rul op"

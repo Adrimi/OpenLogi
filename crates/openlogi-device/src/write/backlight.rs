@@ -1,19 +1,21 @@
 use std::sync::Arc;
 
 use hidpp::{
+    channel::HidppChannel,
     device::Device,
     feature::{
         CreatableFeature,
         backlight::{
-            BacklightFeature, BacklightMode as FirmwareMode, BacklightStatus as FirmwareStatus,
-            SetBacklightConfig,
+            BacklightConfig, BacklightFeature, BacklightMode as FirmwareMode,
+            BacklightStatus as FirmwareStatus, SetBacklightConfig,
         },
     },
 };
 use tracing::debug;
 
+use crate::SharedChannel;
 use crate::backend::HidBackend;
-use crate::backlight::{BacklightMode, BacklightState, BacklightStatus};
+use crate::backlight::{BacklightMode, BacklightState, BacklightStatus, BacklightStep};
 use crate::channel::route::DeviceRoute;
 
 use super::{HidppOperation, WriteError, classify_hidpp_error, open_feature, with_route};
@@ -59,21 +61,33 @@ fn status_from_firmware(status: FirmwareStatus) -> BacklightStatus {
 }
 
 /// Read `getBacklightConfig` + `getBacklightInfo` and merge them into a
-/// [`BacklightState`].
-async fn read_state(feature: &BacklightFeature) -> Result<BacklightState, WriteError> {
+/// [`BacklightState`], keeping the raw config a write has to echo back
+/// unchanged so a caller needs only one round trip to decide and write.
+async fn read_config_and_state(
+    feature: &BacklightFeature,
+) -> Result<(BacklightConfig, BacklightState), WriteError> {
     let config = feature.get_backlight_config().await.map_err(|e| {
         classify_hidpp_error(e, HidppOperation::ReadBacklight, BacklightFeature::ID)
     })?;
     let info = feature.get_backlight_info().await.map_err(|e| {
         classify_hidpp_error(e, HidppOperation::ReadBacklight, BacklightFeature::ID)
     })?;
-    Ok(BacklightState {
-        enabled: config.enabled,
-        mode: mode_from_firmware(config.mode),
-        status: status_from_firmware(info.status),
-        current_level: info.current_level,
-        nb_levels: info.nb_levels,
-    })
+    Ok((
+        config,
+        BacklightState {
+            enabled: config.enabled,
+            mode: mode_from_firmware(config.mode),
+            status: status_from_firmware(info.status),
+            current_level: info.current_level,
+            nb_levels: info.nb_levels,
+        },
+    ))
+}
+
+/// Read `getBacklightConfig` + `getBacklightInfo` and merge them into a
+/// [`BacklightState`].
+async fn read_state(feature: &BacklightFeature) -> Result<BacklightState, WriteError> {
+    Ok(read_config_and_state(feature).await?.1)
 }
 
 /// Read the current backlight state of the keyboard on `route`.
@@ -154,6 +168,74 @@ pub async fn set_backlight_enabled(
         read_state(&feature).await
     })
     .await
+}
+
+/// Step the backlight of the keyboard on an already-open [`SharedChannel`] by
+/// one level, returning the state read back afterwards.
+///
+/// The step starts from the level the device is actually showing — including
+/// one the ambient-light sensor picked — so it behaves like the keyboard's own
+/// backlight keys from the user's point of view.
+///
+/// Two firmware constraints shape the rest. `setBacklightConfig` cannot write
+/// [`BacklightMode::TemporaryManual`], the mode the keyboard's own backlight
+/// keys use, so a software-chosen level is held as
+/// [`BacklightMode::PermanentManual`] — which also takes the level off
+/// ambient-light control until something puts it back. And the write lands in
+/// non-volatile memory, so a step that would not change the level is skipped
+/// outright rather than rewritten.
+///
+/// `FeatureUnsupported` when the device does not expose HID++ `0x1982`.
+pub async fn step_backlight_on(
+    shared: &SharedChannel,
+    step: BacklightStep,
+) -> Result<BacklightState, WriteError> {
+    step_backlight_on_channel(shared.channel(), shared.device_index(), step).await
+}
+
+pub(super) async fn step_backlight_on_channel(
+    channel: &Arc<HidppChannel>,
+    index: u8,
+    step: BacklightStep,
+) -> Result<BacklightState, WriteError> {
+    let mut device = Device::new(Arc::clone(channel), index)
+        .await
+        .map_err(|_| WriteError::DeviceUnreachable { index })?;
+    let feature = open_feature::<BacklightFeature>(&mut device).await?;
+
+    let (config, state) = read_config_and_state(&feature).await?;
+    let Some(current_level) = state.stepped_level(step) else {
+        debug!(
+            index,
+            ?step,
+            level = state.current_level,
+            "backlight already at the end of its range — nothing written"
+        );
+        return Ok(state);
+    };
+
+    feature
+        .set_backlight_config(SetBacklightConfig {
+            // Asking for more light on a backlight software had switched off
+            // should produce light, not a raised level nothing displays.
+            enabled: state.enabled || step == BacklightStep::Up,
+            options: config.options,
+            mode: mode_to_firmware(BacklightMode::PermanentManual),
+            // `None` sends the 0xff "do not change" sentinel, keeping
+            // whichever effect the device already runs.
+            effect: None,
+            current_level,
+            duration_hands_out: config.duration_hands_out,
+            duration_hands_in: config.duration_hands_in,
+            duration_powered: config.duration_powered,
+        })
+        .await
+        .map_err(|e| {
+            classify_hidpp_error(e, HidppOperation::WriteBacklight, BacklightFeature::ID)
+        })?;
+
+    debug!(index, current_level, "stepped backlight");
+    read_state(&feature).await
 }
 
 #[cfg(test)]

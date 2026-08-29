@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Tysta"
 "Brightness Up": "Öka ljusstyrkan"
 "Brightness Down": "Minska ljusstyrkan"
+"Keyboard Backlight Up": "Öka tangentbordsbelysningen"
+"Keyboard Backlight Down": "Minska tangentbordsbelysningen"
 "Cycle DPI Presets": "Bläddra bland DPI-förinställningar"
 "Toggle SmartShift": "Växla SmartShift"
 "Scroll Up": "Rulla upp"

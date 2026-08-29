@@ -243,6 +243,8 @@ _version: 1
 "Mute": "음소거"
 "Brightness Up": "밝기 높이기"
 "Brightness Down": "밝기 낮추기"
+"Keyboard Backlight Up": "키보드 백라이트 밝게"
+"Keyboard Backlight Down": "키보드 백라이트 어둡게"
 "Cycle DPI Presets": "DPI 프리셋 순환"
 "Toggle SmartShift": "SmartShift 전환"
 "Scroll Up": "위로 스크롤"

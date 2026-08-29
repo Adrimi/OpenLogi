@@ -80,7 +80,40 @@ pub struct BacklightState {
     pub nb_levels: u8,
 }
 
+/// Which way a backlight step moves the level.
+///
+/// Local to the write path — this never crosses the agent↔GUI IPC, so it
+/// carries no wire-format constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BacklightStep {
+    /// One level brighter.
+    Up,
+    /// One level dimmer.
+    Down,
+}
+
 impl BacklightState {
+    /// The level one `step` away, or `None` when the backlight already sits at
+    /// that end of its range.
+    ///
+    /// `None` is what lets the caller skip the write entirely, which matters
+    /// here: `setBacklightConfig` writes non-volatile memory, so holding a
+    /// backlight key at the limit must not keep rewriting it.
+    ///
+    /// [`Self::nb_levels`] is a count, so the brightest selectable level is one
+    /// below it. A firmware reporting a level past that end is clamped back
+    /// into range rather than trusted, so one step always lands on a level the
+    /// device will accept.
+    #[must_use]
+    pub fn stepped_level(self, step: BacklightStep) -> Option<u8> {
+        let brightest = self.nb_levels.checked_sub(1)?;
+        let current = self.current_level.min(brightest);
+        match step {
+            BacklightStep::Up => (current < brightest).then_some(current + 1),
+            BacklightStep::Down => current.checked_sub(1),
+        }
+    }
+
     /// Whether the LEDs are dark right now, for whatever reason — software
     /// disable, critical battery, a saturated ambient-light sensor, or a zero
     /// manual level.
@@ -142,5 +175,53 @@ mod tests {
             ..lit()
         };
         assert!(state.is_dark());
+    }
+
+    #[test]
+    fn a_step_moves_one_level_in_the_requested_direction() {
+        assert_eq!(lit().stepped_level(BacklightStep::Up), Some(5));
+        assert_eq!(lit().stepped_level(BacklightStep::Down), Some(3));
+    }
+
+    #[test]
+    fn a_step_stops_at_each_end_instead_of_wrapping() {
+        let brightest = BacklightState {
+            current_level: 7,
+            ..lit()
+        };
+        assert_eq!(brightest.stepped_level(BacklightStep::Up), None);
+        assert_eq!(brightest.stepped_level(BacklightStep::Down), Some(6));
+
+        let off = BacklightState {
+            current_level: 0,
+            ..lit()
+        };
+        assert_eq!(off.stepped_level(BacklightStep::Down), None);
+        assert_eq!(off.stepped_level(BacklightStep::Up), Some(1));
+    }
+
+    #[test]
+    fn a_device_offering_no_levels_cannot_be_stepped() {
+        let state = BacklightState {
+            nb_levels: 0,
+            current_level: 0,
+            ..lit()
+        };
+        assert_eq!(state.stepped_level(BacklightStep::Up), None);
+        assert_eq!(state.stepped_level(BacklightStep::Down), None);
+    }
+
+    #[test]
+    fn a_level_past_the_reported_range_is_clamped_not_trusted() {
+        let state = BacklightState {
+            current_level: 9,
+            ..lit()
+        };
+        assert_eq!(
+            state.stepped_level(BacklightStep::Up),
+            None,
+            "9 clamps to the brightest level, which cannot go higher"
+        );
+        assert_eq!(state.stepped_level(BacklightStep::Down), Some(6));
     }
 }

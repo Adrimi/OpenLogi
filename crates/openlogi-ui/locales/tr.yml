@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Sessize Al"
 "Brightness Up": "Parlaklığı Artır"
 "Brightness Down": "Parlaklığı Azalt"
+"Keyboard Backlight Up": "Klavye ışığını artır"
+"Keyboard Backlight Down": "Klavye ışığını azalt"
 "Cycle DPI Presets": "DPI Ön Ayarlarında Gez"
 "Toggle SmartShift": "SmartShift'i Aç/Kapat"
 "Scroll Up": "Yukarı Kaydır"

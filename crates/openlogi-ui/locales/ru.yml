@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Выключить звук"
 "Brightness Up": "Увеличить яркость"
 "Brightness Down": "Уменьшить яркость"
+"Keyboard Backlight Up": "Увеличить подсветку клавиатуры"
+"Keyboard Backlight Down": "Уменьшить подсветку клавиатуры"
 "Cycle DPI Presets": "Переключать пресеты DPI"
 "Toggle SmartShift": "Переключить SmartShift"
 "Scroll Up": "Прокрутить вверх"

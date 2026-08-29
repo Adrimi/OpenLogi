@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Mute"
 "Brightness Up": "Brightness Up"
 "Brightness Down": "Brightness Down"
+"Keyboard Backlight Up": "Keyboard Backlight Up"
+"Keyboard Backlight Down": "Keyboard Backlight Down"
 "Cycle DPI Presets": "Cycle DPI Presets"
 "Toggle SmartShift": "Toggle SmartShift"
 "Scroll Up": "Scroll Up"

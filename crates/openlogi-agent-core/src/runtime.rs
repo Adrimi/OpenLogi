@@ -15,14 +15,16 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use openlogi_core::binding::{Action, Binding, ButtonId};
-use openlogi_hid::{CaptureChannel, ChannelRegistry};
+use openlogi_hid::{BacklightStep, CaptureChannel, ChannelRegistry};
 use tracing::{info, warn};
 
 use self::button::{
     ButtonInputHandle, ButtonRuntimeEvent, ButtonRuntimeOwner, EndReason, PressControl,
 };
 pub(crate) use self::button::{HidppSessionId, PressToken};
-use crate::hardware::{toggle_smartshift_in_background, write_dpi_in_background};
+use crate::hardware::{
+    step_backlight_in_background, toggle_smartshift_in_background, write_dpi_in_background,
+};
 use crate::receiver_access::ReceiverAccess;
 use crate::{DpiCycleState, DpiCycles};
 
@@ -107,6 +109,27 @@ impl ActionExecutor {
                     &self.registry,
                     &self.receiver_access,
                     target,
+                );
+                return;
+            }
+            Action::KeyboardBacklightUp | Action::KeyboardBacklightDown => {
+                let step = if matches!(action, Action::KeyboardBacklightUp) {
+                    BacklightStep::Up
+                } else {
+                    BacklightStep::Down
+                };
+                let target = self
+                    .dpi_cycle
+                    .read()
+                    .ok()
+                    .and_then(|cycles| cycles.target_for(device_key));
+                info!(?step, "keyboard backlight action → writing to device");
+                step_backlight_in_background(
+                    &self.capture,
+                    &self.registry,
+                    &self.receiver_access,
+                    target,
+                    step,
                 );
                 return;
             }

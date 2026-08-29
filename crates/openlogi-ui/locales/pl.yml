@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Wycisz"
 "Brightness Up": "Zwiększ jasność"
 "Brightness Down": "Zmniejsz jasność"
+"Keyboard Backlight Up": "Zwiększ podświetlenie klawiatury"
+"Keyboard Backlight Down": "Zmniejsz podświetlenie klawiatury"
 "Cycle DPI Presets": "Przełączaj ustawienia wstępne DPI"
 "Toggle SmartShift": "Przełącz SmartShift"
 "Scroll Up": "Przewiń w górę"

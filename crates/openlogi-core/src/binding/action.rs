@@ -191,6 +191,19 @@ pub enum Action {
     BrightnessUp,
     /// Decrease the primary display brightness.
     BrightnessDown,
+    /// Raise the keyboard's own backlight one level over HID++ `0x1982`.
+    ///
+    /// Unlike [`Self::BrightnessUp`], which synthesizes a system key, this is
+    /// a write to the device — the agent performs it, so it carries
+    /// [`super::Effect::AgentSide`].
+    ///
+    /// The write targets the device the press came from, the way every other
+    /// hardware action does: a key on the keyboard adjusts that keyboard.
+    /// Bound to a mouse button it reaches a device with no `0x1982`, and the
+    /// agent logs the refusal rather than guessing at another device.
+    KeyboardBacklightUp,
+    /// Lower the keyboard's own backlight one level over HID++ `0x1982`.
+    KeyboardBacklightDown,
 }
 
 /// One step in a [`Action::Workflow`]. A workflow is a `Vec<WorkflowStep>`
@@ -283,6 +296,8 @@ macro_rules! for_each_unit_action {
             MuteVolume "Mute" Media Mute,
             BrightnessUp "Brightness Up" Media Monitor,
             BrightnessDown "Brightness Down" Media Monitor,
+            KeyboardBacklightUp "Keyboard Backlight Up" Media Keyboard,
+            KeyboardBacklightDown "Keyboard Backlight Down" Media Keyboard,
             // DPI
             CycleDpiPresets "Cycle DPI Presets" Dpi Gauge,
             ToggleSmartShift "Toggle SmartShift" Dpi Refresh,

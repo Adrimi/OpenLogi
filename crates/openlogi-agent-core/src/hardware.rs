@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use openlogi_core::config::Lighting;
 use openlogi_hid::{
-    CaptureChannel, ChannelRegistry, DeviceRoute, Dpi, HidppOperation, ScrollResolution,
-    SharedChannel, SmartShiftStatus, WriteError,
+    BacklightStep, CaptureChannel, ChannelRegistry, DeviceRoute, Dpi, HidppOperation,
+    ScrollResolution, SharedChannel, SmartShiftStatus, WriteError,
 };
 use tokio::time::error::Elapsed;
 use tracing::{debug, warn};
@@ -231,6 +231,40 @@ pub fn toggle_smartshift_in_background(
             Err(_) => warn!(
                 index,
                 "SmartShift toggle timed out (device asleep/unresponsive)"
+            ),
+        },
+    );
+}
+
+/// Spawn an OS thread that steps the backlight of `target`'s keyboard one
+/// level via [`openlogi_hid::step_backlight_on`]. Returns immediately;
+/// failures — including keyboards that expose no `0x1982` backlight at all,
+/// and the RGB families that use a different feature — are logged.
+pub fn step_backlight_in_background(
+    capture: &CaptureChannel,
+    registry: &ChannelRegistry,
+    receiver_access: &ReceiverAccess,
+    target: Option<DeviceRoute>,
+    step: BacklightStep,
+) {
+    let Some(target) = target else {
+        debug!(?step, "no target device — backlight step skipped");
+        return;
+    };
+    let index = target.device_index();
+    DeviceOp::new(capture, registry, receiver_access, &target).spawn_write(
+        "backlight step",
+        move |c| async move { openlogi_hid::step_backlight_on(&c, step).await },
+        move |result| match result {
+            Ok(Ok(state)) => debug!(
+                index,
+                level = state.current_level,
+                "keyboard backlight stepped"
+            ),
+            Ok(Err(e)) => warn!(error = ?e, "keyboard backlight step failed"),
+            Err(_) => warn!(
+                index,
+                "keyboard backlight step timed out (device asleep/unresponsive)"
             ),
         },
     );

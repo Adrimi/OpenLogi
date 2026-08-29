@@ -3,7 +3,10 @@ use hidpp::feature::extended_dpi::{DpiRange, Lod};
 use hidpp::feature::per_key_lighting::FramePersistence;
 use hidpp::feature::smartshift::WheelMode;
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use crate::SharedChannel;
+use crate::backlight::{BacklightMode, BacklightStep};
 use crate::channel::scripted::{ScriptedRawHidChannel, feature_error, scripted_channel};
 use crate::write::diagnostics::dump_firmware_entities_on_channel;
 use crate::write::dpi::expand_dpi_ranges;
@@ -758,4 +761,170 @@ async fn a_channel_failure_aborts_the_dump_instead_of_blaming_the_firmware() {
         !written.iter().any(|report| is_fw_info_for(report, 2)),
         "the dump stops at the failure rather than timing out per entity"
     );
+}
+
+/// Feature index the scripted keyboard reports for `0x1982 Backlight`.
+const BACKLIGHT_INDEX: u8 = 0x0b;
+/// Fade-out durations the scripted keyboard reports, chosen distinct so a
+/// write that fails to echo them back is visible.
+const SCRIPTED_DURATIONS: [u16; 3] = [12, 6, 60];
+
+/// Live level of [`keyboard_with_ambient_backlight`], so a write is visible to
+/// the read-back that follows it.
+static SCRIPTED_LEVEL: AtomicU8 = AtomicU8::new(4);
+/// Live `0x1982` mode of the same keyboard, as the raw 2-bit wire value.
+static SCRIPTED_MODE: AtomicU8 = AtomicU8::new(1);
+
+#[tokio::test]
+async fn a_backlight_step_writes_the_next_level_and_takes_the_level_off_the_sensor()
+-> Result<(), WriteError> {
+    SCRIPTED_LEVEL.store(4, Ordering::Relaxed);
+    SCRIPTED_MODE.store(1, Ordering::Relaxed);
+    let (raw, handle) = ScriptedRawHidChannel::with_responder(keyboard_with_ambient_backlight);
+    let shared = SharedChannel::new(
+        scripted_channel(raw).await,
+        DeviceRoute::Direct {
+            vendor_id: 0x046d,
+            product_id: 0xb369,
+        },
+    );
+
+    let state = step_backlight_on(&shared, BacklightStep::Up).await?;
+
+    let write = handle
+        .written_reports()
+        .into_iter()
+        .find(|report| is_backlight_config_write(report))
+        .expect("stepping up must write the new level to the device");
+    assert_eq!(write[4], 1, "the backlight stays enabled");
+    assert_eq!(
+        write[5], 0b0001_1000,
+        "mode is PermanentManual (3) in bits 3-4: software cannot write the \
+         TemporaryManual the keyboard's own backlight keys use, and leaving \
+         Automatic would hand the level straight back to the sensor"
+    );
+    assert_eq!(write[6], 0xff, "the running effect is left unchanged");
+    assert_eq!(write[7], 5, "one level up from the 4 the sensor had chosen");
+    assert_eq!(
+        &write[8..14],
+        &[12, 0, 6, 0, 60, 0],
+        "the fade-out durations are echoed back untouched"
+    );
+
+    assert_eq!(state.current_level, 5, "the read-back reflects the write");
+    assert_eq!(state.mode, BacklightMode::PermanentManual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_backlight_step_at_the_limit_writes_nothing() -> Result<(), WriteError> {
+    // `setBacklightConfig` writes non-volatile memory, so a held key at the
+    // brightest level must not keep rewriting it.
+    let (raw, handle) = ScriptedRawHidChannel::with_responder(keyboard_with_backlight_at_maximum);
+    let shared = SharedChannel::new(
+        scripted_channel(raw).await,
+        DeviceRoute::Direct {
+            vendor_id: 0x046d,
+            product_id: 0xb369,
+        },
+    );
+
+    let state = step_backlight_on(&shared, BacklightStep::Up).await?;
+
+    assert!(
+        !handle
+            .written_reports()
+            .iter()
+            .any(|report| is_backlight_config_write(report)),
+        "a step past the brightest level must not reach the device"
+    );
+    assert_eq!(state.current_level, 7);
+    Ok(())
+}
+
+/// Whether `report` is a `0x1982` `setBacklightConfig` (function 1) write.
+fn is_backlight_config_write(report: &[u8]) -> bool {
+    report.len() >= 14
+        && report[0] == 0x11
+        && report[2] == BACKLIGHT_INDEX
+        && report[3] >> 4 == 0x01
+}
+
+/// Shared `0x1982` responder body: `level` and `mode` are supplied by the
+/// caller so one keyboard can be stateful and another pinned at its limit.
+fn backlight_response(
+    request: &[u8],
+    level: u8,
+    mode: u8,
+    on_write: Option<&dyn Fn(u8, u8)>,
+) -> Option<Vec<u8>> {
+    if request.len() < 7 || !matches!(request[0], 0x10 | 0x11) {
+        return None;
+    }
+    let mut payload = [0u8; 16];
+    let long = match (request[2], request[3] >> 4) {
+        // Root ping used by Device::new.
+        (0x00, 0x01) => {
+            payload[0] = 4;
+            false
+        }
+        // Root feature lookup — this keyboard implements only 0x1982.
+        (0x00, 0x00) => {
+            if u16::from_be_bytes([request[4], request[5]]) == 0x1982 {
+                payload[0] = BACKLIGHT_INDEX;
+            }
+            false
+        }
+        // getBacklightConfig.
+        (BACKLIGHT_INDEX, 0x00) => {
+            payload[0] = 1;
+            payload[1..3].copy_from_slice(&(u16::from(mode) << 3).to_le_bytes());
+            payload[5] = level;
+            payload[6..8].copy_from_slice(&SCRIPTED_DURATIONS[0].to_le_bytes());
+            payload[8..10].copy_from_slice(&SCRIPTED_DURATIONS[1].to_le_bytes());
+            payload[10..12].copy_from_slice(&SCRIPTED_DURATIONS[2].to_le_bytes());
+            true
+        }
+        // getBacklightInfo: eight levels, and a status that follows the mode.
+        (BACKLIGHT_INDEX, 0x02) => {
+            payload[0] = 8;
+            payload[1] = level;
+            payload[2] = if mode == 3 { 5 } else { 2 };
+            true
+        }
+        // setBacklightConfig: record what the host asked for.
+        (BACKLIGHT_INDEX, 0x01) => {
+            if let Some(on_write) = on_write {
+                on_write(request[7], (request[5] >> 3) & 0b11);
+            }
+            true
+        }
+        _ => return None,
+    };
+
+    let mut response = vec![0u8; if long { 20 } else { 7 }];
+    response[0] = if long { 0x11 } else { 0x10 };
+    response[1..4].copy_from_slice(&request[1..4]);
+    let payload_len = response.len() - 4;
+    response[4..].copy_from_slice(&payload[..payload_len]);
+    Some(response)
+}
+
+/// A keyboard whose backlight the ambient-light sensor currently holds at
+/// level 4 of 8, and which remembers what the host writes.
+fn keyboard_with_ambient_backlight(request: &[u8]) -> Option<Vec<u8>> {
+    backlight_response(
+        request,
+        SCRIPTED_LEVEL.load(Ordering::Relaxed),
+        SCRIPTED_MODE.load(Ordering::Relaxed),
+        Some(&|level, mode| {
+            SCRIPTED_LEVEL.store(level, Ordering::Relaxed);
+            SCRIPTED_MODE.store(mode, Ordering::Relaxed);
+        }),
+    )
+}
+
+/// The same keyboard already at its brightest level.
+fn keyboard_with_backlight_at_maximum(request: &[u8]) -> Option<Vec<u8>> {
+    backlight_response(request, 7, 3, None)
 }

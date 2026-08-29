@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Stummschalten"
 "Brightness Up": "Helligkeit erhöhen"
 "Brightness Down": "Helligkeit verringern"
+"Keyboard Backlight Up": "Tastaturbeleuchtung heller"
+"Keyboard Backlight Down": "Tastaturbeleuchtung dunkler"
 "Cycle DPI Presets": "DPI-Voreinstellungen durchschalten"
 "Toggle SmartShift": "SmartShift umschalten"
 "Scroll Up": "Nach oben scrollen"

@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Muto"
 "Brightness Up": "Aumenta luminosità"
 "Brightness Down": "Riduci luminosità"
+"Keyboard Backlight Up": "Aumenta retroilluminazione tastiera"
+"Keyboard Backlight Down": "Riduci retroilluminazione tastiera"
 "Cycle DPI Presets": "Cicla preset DPI"
 "Toggle SmartShift": "Attiva/Disattiva SmartShift"
 "Scroll Up": "Scorri su"

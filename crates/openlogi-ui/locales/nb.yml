@@ -243,6 +243,8 @@ _version: 1
 "Mute": "Demp"
 "Brightness Up": "Øk lysstyrken"
 "Brightness Down": "Reduser lysstyrken"
+"Keyboard Backlight Up": "Øk tastaturbelysningen"
+"Keyboard Backlight Down": "Reduser tastaturbelysningen"
 "Cycle DPI Presets": "Bla gjennom DPI-forhåndsinnstillinger"
 "Toggle SmartShift": "Veksle SmartShift"
 "Scroll Up": "Rull opp"
