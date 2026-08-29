@@ -438,8 +438,8 @@ mod tests {
     use openlogi_core::binding::{MediaKey, Shortcut};
 
     use super::{
-        NX_KEYTYPE_BRIGHTNESS_DOWN, NX_KEYTYPE_BRIGHTNESS_UP, combo, held_key_event,
-        hid_usage_to_macos, nx_key,
+        NX_KEYTYPE_BRIGHTNESS_DOWN, NX_KEYTYPE_BRIGHTNESS_UP, NX_KEYTYPE_SOUND_UP, combo,
+        held_key_event, hid_usage_to_macos, nx_key,
     };
     use crate::inject::{HeldKey, HeldModifiers, KeyPhase};
 
@@ -457,6 +457,11 @@ mod tests {
     fn display_brightness_maps_to_native_system_keys() {
         assert_eq!(nx_key(MediaKey::BrightnessUp), NX_KEYTYPE_BRIGHTNESS_UP);
         assert_eq!(nx_key(MediaKey::BrightnessDown), NX_KEYTYPE_BRIGHTNESS_DOWN);
+    }
+
+    #[test]
+    fn volume_up_maps_to_the_native_system_key() {
+        assert_eq!(nx_key(MediaKey::VolumeUp), NX_KEYTYPE_SOUND_UP);
     }
 
     /// Pin a handful of representative `Shortcut -> KeyCombo` rows so an

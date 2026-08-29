@@ -18,6 +18,7 @@ use crate::backend::{BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, 
 #[derive(Clone)]
 pub(crate) struct ScriptedRawHidHandle {
     written: Arc<Mutex<Vec<Vec<u8>>>>,
+    incoming: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl ScriptedRawHidHandle {
@@ -26,6 +27,14 @@ impl ScriptedRawHidHandle {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Push one report the device sends on its own, with no request to answer.
+    /// HID++ notifications — a diverted control's press/release broadcast, a
+    /// reconnection status — arrive this way, so a responder (which only ever
+    /// replies to a write) cannot express them.
+    pub(crate) fn emit(&self, report: Vec<u8>) {
+        let _ = self.incoming.send(report);
     }
 }
 
@@ -66,13 +75,16 @@ impl ScriptedRawHidChannel {
         let written = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
-                incoming_tx,
+                incoming_tx: incoming_tx.clone(),
                 incoming_rx: tokio::sync::Mutex::new(incoming_rx),
                 written: Arc::clone(&written),
                 responder,
                 fails,
             },
-            ScriptedRawHidHandle { written },
+            ScriptedRawHidHandle {
+                written,
+                incoming: incoming_tx,
+            },
         )
     }
 }

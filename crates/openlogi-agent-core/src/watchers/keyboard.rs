@@ -310,6 +310,8 @@ async fn manage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DpiCycles;
+    use crate::runtime::ActionRuntime;
 
     fn target() -> KeyboardTarget {
         KeyboardTarget {
@@ -379,5 +381,47 @@ mod tests {
             "a draining session's queued input must not enter the replacement lifecycle"
         );
         assert!(!accepts_input(&session_id(7), None));
+    }
+
+    #[test]
+    fn captured_insert_runs_its_binding_through_the_action_runtime() {
+        let (action_ring, mut actions) = tokio::sync::mpsc::unbounded_channel();
+        let mut runtime = ActionRuntime::new(
+            Arc::new(RwLock::new(DpiCycles::default())),
+            Arc::new(RwLock::new(None)),
+            ChannelRegistry::default(),
+            ReceiverAccess::default(),
+            action_ring,
+        )
+        .expect("action runtime");
+        let spec = KeyboardSpec {
+            config_key: "keyboard-a".to_string(),
+            route: target().route,
+            wanted: BTreeMap::from([(13, ButtonId::KeyFunction(13))]),
+            bindings: BTreeMap::from([(
+                ButtonId::KeyFunction(13),
+                Binding::Single(openlogi_core::binding::Action::ShowActionsRing),
+            )]),
+        };
+        let session = session_id(7);
+
+        dispatch_input(
+            &session,
+            CapturedInput::ButtonDown(ButtonId::KeyFunction(13)),
+            &spec,
+            &runtime.dispatcher(),
+        );
+
+        assert_eq!(
+            actions.blocking_recv(),
+            Some(Some("keyboard-a".to_string()))
+        );
+        dispatch_input(
+            &session,
+            CapturedInput::ButtonUp(ButtonId::KeyFunction(13)),
+            &spec,
+            &runtime.dispatcher(),
+        );
+        runtime.shutdown();
     }
 }
