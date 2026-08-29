@@ -202,6 +202,7 @@ fn function_key_position(keycode: u16) -> Option<u8> {
         0x6B => 14,
         0x71 => 15,
         0x6A => 16,
+        0x72 => 13,
         _ => return None,
     })
 }

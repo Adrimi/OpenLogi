@@ -75,6 +75,10 @@ fn keyboard_spec_maps_global_f_keys_to_physical_positions() {
         "f5".parse().expect("F5 trigger"),
         Some(Action::BrightnessUp),
     );
+    config.set_keyboard_binding(
+        "ins".parse().expect("Insert trigger"),
+        Some(Action::VolumeUp),
+    );
     let mut orchestrator = orchestrator(config);
     orchestrator.devices = vec![keyboard_dev("keyboard")];
 
@@ -85,6 +89,7 @@ fn keyboard_spec_maps_global_f_keys_to_physical_positions() {
         std::collections::BTreeMap::from([
             (4, ButtonId::KeyFunction(4)),
             (5, ButtonId::KeyFunction(5)),
+            (13, ButtonId::KeyFunction(13)),
         ])
     );
     assert_eq!(
@@ -94,6 +99,10 @@ fn keyboard_spec_maps_global_f_keys_to_physical_positions() {
     assert_eq!(
         spec.bindings.get(&ButtonId::KeyFunction(5)),
         Some(&Binding::Single(Action::BrightnessUp))
+    );
+    assert_eq!(
+        spec.bindings.get(&ButtonId::KeyFunction(13)),
+        Some(&Binding::Single(Action::VolumeUp))
     );
 }
 

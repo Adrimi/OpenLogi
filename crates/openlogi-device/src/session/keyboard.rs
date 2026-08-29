@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn mx_keys_mini_f4_and_f5_resolve_by_position() {
+    fn mx_keys_mini_f4_f5_and_insert_resolve_by_position() {
         let controls = [
             reprog_controls::CtrlIdInfo {
                 cid: 0x00e2,
@@ -318,9 +318,16 @@ mod tests {
                 flags: 1 << 5,
                 position: 5,
             },
+            reprog_controls::CtrlIdInfo {
+                cid: 0x00e9,
+                task_id: 0,
+                flags: 1 << 5,
+                position: 13,
+            },
         ];
 
         assert_eq!(divertable_cid_at_position(&controls, 4), Some(0x00e2));
         assert_eq!(divertable_cid_at_position(&controls, 5), Some(0x00e3));
+        assert_eq!(divertable_cid_at_position(&controls, 13), Some(0x00e9));
     }
 }
