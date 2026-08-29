@@ -31,15 +31,16 @@ pub async fn run(args: ControlsArgs) -> Result<()> {
     }
 
     println!(
-        "  {:>6}  {:>6}  {:>6}  capabilities",
-        "cid", "task", "flags"
+        "  {:>6}  {:>6}  {:>6}  {:>3}  capabilities",
+        "cid", "task", "flags", "pos"
     );
     for control in controls {
         println!(
-            "  0x{:04x}  0x{:04x}  0x{:04x}  {}",
+            "  0x{:04x}  0x{:04x}  0x{:04x}  {:>3}  {}",
             control.cid,
             control.task_id,
             control.flags.raw(),
+            control.position,
             ControlCapabilitiesDisplay(control)
         );
     }
@@ -81,6 +82,7 @@ mod tests {
             cid: 0,
             task_id: 0,
             flags: openlogi_hid::reprog_controls::CidFlags::default(),
+            position: 0,
         };
 
         assert_eq!(ControlCapabilitiesDisplay(entry).to_string(), "-");
@@ -94,6 +96,7 @@ mod tests {
             flags: openlogi_hid::reprog_controls::CidFlags::DIVERTABLE
                 | openlogi_hid::reprog_controls::CidFlags::FORCE_RAW_XY
                 | openlogi_hid::reprog_controls::CidFlags::ANALYTICS_KEY_EVENTS,
+            position: 0,
         };
 
         assert_eq!(

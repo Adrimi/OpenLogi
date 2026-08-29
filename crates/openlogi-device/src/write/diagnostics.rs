@@ -43,6 +43,10 @@ pub struct ReprogControlEntry {
     pub task_id: u16,
     /// Capability and classification flags for the control.
     pub flags: CidFlags,
+    /// Physical function-row position, or `0` for a control the firmware
+    /// places outside the F-row. Keyboard capture resolves a bound key
+    /// through this field, so a dump has to show it.
+    pub position: u8,
 }
 
 impl From<CidInfo> for ReprogControlEntry {
@@ -51,6 +55,7 @@ impl From<CidInfo> for ReprogControlEntry {
             cid: info.cid.into(),
             task_id: info.task_id.0,
             flags: info.flags,
+            position: info.position,
         }
     }
 }
