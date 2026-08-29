@@ -1170,17 +1170,6 @@ fn synthesized_esc_x(first_function_key_x: f32) -> f32 {
     (first_function_key_x - 0.045).max(0.02)
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "FUNCTION_KEYS is a fixed table of a dozen entries"
-)]
-fn fallback_key_x_fractions() -> Vec<f32> {
-    let step = (EVEN_SPACING_END - EVEN_SPACING_START) / (FUNCTION_KEYS.len() - 1) as f32;
-    (0..FUNCTION_KEYS.len())
-        .map(|i| EVEN_SPACING_START + (i as f32) * step)
-        .collect()
-}
-
 fn fallback_key_points() -> Vec<KeyPoint> {
     fallback_points_for(FUNCTION_KEYS.len())
 }
