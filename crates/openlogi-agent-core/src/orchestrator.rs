@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use openlogi_core::app::ForegroundApp;
-use openlogi_core::binding::{Action, Binding};
+use openlogi_core::binding::{Action, Binding, ButtonId};
 use openlogi_core::bindings::{button_bindings_for, oshook_gestures_for};
 use openlogi_core::config::{Config, LightSettings, ScrollResolution};
 use openlogi_core::device::{
@@ -24,7 +24,6 @@ use openlogi_core::device::{
 use openlogi_core::device_order::{DeviceIdentity, DeviceStableId};
 use openlogi_hid::{
     CaptureChannel, ChannelPool, ChannelRegistry, DIRECT_DEVICE_INDEX, DeviceRoute,
-    KEYBOARD_KEY_CIDS,
 };
 use openlogi_ipc::InventoryHealth;
 use tracing::{debug, info, warn};
@@ -185,6 +184,28 @@ enum InventoryState {
     Unavailable,
 }
 
+fn function_key_position(keycode: u16) -> Option<u8> {
+    Some(match keycode {
+        0x7A => 1,
+        0x78 => 2,
+        0x63 => 3,
+        0x76 => 4,
+        0x60 => 5,
+        0x61 => 6,
+        0x62 => 7,
+        0x64 => 8,
+        0x65 => 9,
+        0x6D => 10,
+        0x67 => 11,
+        0x6F => 12,
+        0x69 => 13,
+        0x6B => 14,
+        0x71 => 15,
+        0x6A => 16,
+        _ => return None,
+    })
+}
+
 impl Orchestrator {
     /// Build from a loaded config. Creates the shared `Arc`s and seeds them
     /// from the config with no devices yet; the first inventory tick fills in
@@ -278,20 +299,21 @@ impl Orchestrator {
             .devices
             .iter()
             .find(|d| d.kind == DeviceKind::Keyboard && d.route.is_some())?;
-        let bindings = button_bindings_for(
-            &self.config,
-            Some(&dev.config_key),
-            self.current_app.as_deref(),
-        );
-        let wanted: BTreeMap<u16, _> = KEYBOARD_KEY_CIDS
+        let mut bindings = BTreeMap::new();
+        let wanted: BTreeMap<u8, _> = self
+            .config
+            .keyboard
+            .bindings
             .iter()
-            .filter(|(_, button)| {
-                bindings.get(button).is_some_and(|binding| {
-                    matches!(binding, Binding::LongPress(_))
-                        || binding.click_action() != Action::None
-                })
+            .filter_map(|(trigger, action)| {
+                if !trigger.modifiers.is_empty() || *action == Action::None {
+                    return None;
+                }
+                let position = function_key_position(trigger.keycode)?;
+                let button = ButtonId::KeyFunction(position);
+                bindings.insert(button, Binding::Single(action.clone()));
+                Some((position, button))
             })
-            .copied()
             .collect();
         if wanted.is_empty() {
             return None;

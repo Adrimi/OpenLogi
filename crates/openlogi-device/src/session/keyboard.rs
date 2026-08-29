@@ -36,34 +36,17 @@ use crate::channel::route::{DeviceRoute, open_route_channel};
 
 use crate::reprog_controls::{self, RawControlEvent, ReprogControlsV4};
 
-/// The divertable keyboard F-row controls OpenLogi models, as
-/// `(0x1b04 control ID, ButtonId)` pairs. CID values match Logitech's control
-/// catalog (cross-checked against Solaar's `special_keys.py`); the F-row
-/// positions are the Signature-series layout.
-pub const KEYBOARD_KEY_CIDS: [(u16, ButtonId); 9] = [
-    (0x00d4, ButtonId::KeySearch),
-    (0x0103, ButtonId::KeyDictation),
-    (0x0108, ButtonId::KeyEmoji),
-    (0x010a, ButtonId::KeyScreenCapture),
-    (0x011c, ButtonId::KeyMicMute),
-    (0x00e5, ButtonId::KeyPlayPause),
-    (0x00e7, ButtonId::KeyMute),
-    (0x00e8, ButtonId::KeyVolumeDown),
-    (0x00e9, ButtonId::KeyVolumeUp),
-];
-
 /// Capture the requested keyboard controls on `route` until `shutdown`
 /// resolves, forwarding [`CapturedInput::ButtonDown`] and
 /// [`CapturedInput::ButtonUp`] edges to `sink`.
 ///
-/// `wanted` maps `0x1b04` control IDs to the [`ButtonId`] they dispatch as —
-/// the caller passes only the keys that carry a real binding. Controls the
-/// device doesn't expose (or can't divert) are skipped with a debug log, so a
-/// partially-supported keyboard degrades per key rather than failing whole.
+/// `wanted` maps physical F-key positions to the [`ButtonId`] they dispatch
+/// as. The session resolves each position through the keyboard's live
+/// `0x1b04` control table, because control IDs vary between keyboard models.
 pub async fn run_keyboard_capture_session(
     backend: &dyn HidBackend,
     route: DeviceRoute,
-    wanted: BTreeMap<u16, ButtonId>,
+    wanted: BTreeMap<u8, ButtonId>,
     sink: mpsc::UnboundedSender<CapturedInput>,
     shutdown: oneshot::Receiver<()>,
     channel_slot: CaptureChannel,
@@ -82,7 +65,7 @@ pub async fn run_keyboard_capture_session(
 /// inventory publication.
 pub async fn run_keyboard_capture_session_with_registry(
     route: DeviceRoute,
-    wanted: BTreeMap<u16, ButtonId>,
+    wanted: BTreeMap<u8, ButtonId>,
     sink: mpsc::UnboundedSender<CapturedInput>,
     shutdown: oneshot::Receiver<()>,
     channel_slot: CaptureChannel,
@@ -97,7 +80,7 @@ pub async fn run_keyboard_capture_session_with_registry(
 async fn run_keyboard_capture_session_on(
     route: DeviceRoute,
     shared: SharedChannel,
-    wanted: BTreeMap<u16, ButtonId>,
+    wanted: BTreeMap<u8, ButtonId>,
     sink: mpsc::UnboundedSender<CapturedInput>,
     shutdown: oneshot::Receiver<()>,
     channel_slot: CaptureChannel,
@@ -237,30 +220,39 @@ fn emit_button_edges(
     }
 }
 
-/// Divert every wanted control the keyboard exposes as divertable, returning
-/// the armed `CID → ButtonId` subset. Missing / non-divertable controls are
-/// skipped with a debug log, so a partially-supported keyboard degrades per
-/// key rather than failing whole.
+/// Divert every wanted F-key position the keyboard exposes as divertable,
+/// returning the armed `CID → ButtonId` subset. Missing or non-divertable
+/// controls are skipped so a partially-supported keyboard degrades per key.
 async fn arm_keys(
     rc: &ReprogControlsV4,
     controls: &[reprog_controls::CtrlIdInfo],
-    wanted: &BTreeMap<u16, ButtonId>,
+    wanted: &BTreeMap<u8, ButtonId>,
 ) -> Result<BTreeMap<u16, ButtonId>, GestureError> {
     let mut diverted = BTreeMap::new();
-    for (&cid, &button) in wanted {
-        if controls.iter().any(|c| c.cid == cid && c.is_divertable()) {
+    for (&position, &button) in wanted {
+        if let Some(cid) = divertable_cid_at_position(controls, position) {
             rc.divert_cid(cid)
                 .await
                 .map_err(|e| GestureError::Hidpp(format!("{e:?}")))?;
             diverted.insert(cid, button);
         } else {
             debug!(
-                cid = format_args!("{cid:#06x}"),
+                position,
                 "bound key not divertable on this keyboard — left native"
             );
         }
     }
     Ok(diverted)
+}
+
+fn divertable_cid_at_position(
+    controls: &[reprog_controls::CtrlIdInfo],
+    position: u8,
+) -> Option<u16> {
+    controls
+        .iter()
+        .find(|control| control.position == position && control.is_divertable())
+        .map(|control| control.cid)
 }
 
 /// Re-issue diversion for every armed control after a device power-cycle.
@@ -309,5 +301,26 @@ mod tests {
                 CapturedInput::ButtonUp(ButtonId::KeyDictation),
             ]
         );
+    }
+
+    #[test]
+    fn mx_keys_mini_f4_and_f5_resolve_by_position() {
+        let controls = [
+            reprog_controls::CtrlIdInfo {
+                cid: 0x00e2,
+                task_id: 0,
+                flags: 1 << 5,
+                position: 4,
+            },
+            reprog_controls::CtrlIdInfo {
+                cid: 0x00e3,
+                task_id: 0,
+                flags: 1 << 5,
+                position: 5,
+            },
+        ];
+
+        assert_eq!(divertable_cid_at_position(&controls, 4), Some(0x00e2));
+        assert_eq!(divertable_cid_at_position(&controls, 5), Some(0x00e3));
     }
 }

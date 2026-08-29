@@ -73,10 +73,13 @@ pub enum ButtonId {
     /// Tilting the main wheel right — `0x1b04` CID `0x005d` ("Right Scroll"),
     /// Logi metadata slot `SLOT_NAME_RIGHT_SCROLL_BUTTON`. Counterpart to
     /// [`ButtonId::WheelTiltLeft`].
+    WheelTiltRight,
+    /// A keyboard function-row control identified by its physical F-key
+    /// position (`1` for F1, `2` for F2, and so on).
     ///
     /// Declared last: the TOML config and any serialized form encode the
     /// variant identifier / index, so new buttons are append-only.
-    WheelTiltRight,
+    KeyFunction(u8),
 }
 
 impl ButtonId {
@@ -99,10 +102,9 @@ impl ButtonId {
         ButtonId::HapticPanel,
     ];
 
-    /// The divertable keyboard F-row controls, in F-row order. Kept out of
-    /// [`ButtonId::ALL`]: that array seeds mouse defaults and the mouse
-    /// popover trigger list, while keyboard keys stay native unless the user
-    /// binds them (an unbound key is never diverted).
+    /// Legacy semantic keyboard controls, in their original Signature-series
+    /// order. Kept out of [`ButtonId::ALL`]: that array seeds mouse defaults
+    /// and the mouse popover trigger list.
     pub const KEYBOARD_KEYS: [ButtonId; 9] = [
         ButtonId::KeySearch,
         ButtonId::KeyDictation,
@@ -166,12 +168,16 @@ impl ButtonId {
             ButtonId::KeyVolumeDown => "Volume Down Key",
             ButtonId::KeyVolumeUp => "Volume Up Key",
             ButtonId::HapticPanel => "Haptic Panel",
+            ButtonId::KeyFunction(_) => "Function Key",
         }
     }
 }
 
 impl fmt::Display for ButtonId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
+        match self {
+            ButtonId::KeyFunction(position) => write!(f, "F{position}"),
+            _ => f.write_str(self.label()),
+        }
     }
 }

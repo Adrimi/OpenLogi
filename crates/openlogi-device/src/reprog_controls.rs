@@ -95,6 +95,8 @@ pub struct CtrlIdInfo {
     pub task_id: u16,
     /// `KeyFlag` capability bitfield (response bytes 4 and 8 combined).
     pub flags: u16,
+    /// Physical function-row position reported by the device.
+    pub position: u8,
 }
 
 impl CtrlIdInfo {
@@ -142,6 +144,7 @@ impl From<CidInfo> for CtrlIdInfo {
             cid: info.cid.into(),
             task_id: info.task_id.0,
             flags: info.flags.raw(),
+            position: info.position,
         }
     }
 }
