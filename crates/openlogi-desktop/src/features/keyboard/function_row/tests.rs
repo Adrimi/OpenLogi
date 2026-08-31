@@ -30,6 +30,27 @@ fn function_row_covers_esc_through_f19() {
 }
 
 #[test]
+fn mx_keys_mini_hides_easy_switch_and_uses_insert_after_f12() {
+    let asset = mx_keys_mini_asset();
+    let layout = key_layout(Some(&asset));
+    let labels: Vec<_> = layout.iter().map(|(label, _, _)| *label).collect();
+
+    assert_eq!(
+        labels,
+        [
+            "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Ins"
+        ]
+    );
+    assert!(
+        !labels
+            .iter()
+            .any(|label| matches!(*label, "F1" | "F2" | "F3")),
+        "F1-F3 are Easy-Switch keys the firmware refuses to divert"
+    );
+    assert_eq!(layout.last().map(|(_, keycode, _)| *keycode), Some(0x72));
+}
+
+#[test]
 fn fallback_key_positions_cover_the_full_top_row() {
     let positions = key_x_fractions(None);
 
@@ -268,6 +289,40 @@ fn asset_with_markers(key_markers: &[f32], easy_switch_markers: &[f32]) -> Resol
                     assignments: assignments_from_markers(easy_switch_markers),
                 },
             ],
+        },
+        png_width: 1872,
+        png_height: 728,
+    }
+}
+
+/// The MX Keys Mini depot: ten `device_keys_image` markers for the keys this
+/// board actually carries, F4 through F12 plus Insert.
+fn mx_keys_mini_asset() -> ResolvedAsset {
+    let assignments = MX_KEYS_MINI_KEYS
+        .iter()
+        .zip([27.9, 34.3, 40.75, 47.1, 53.5, 59.9, 66.3, 72.7, 79.1, 85.5])
+        .map(|(&(_, _, slot_name), x)| Assignment {
+            slot_name: slot_name.to_string(),
+            marker: Point { x, y: 13.8 },
+            label: Direction { x: -1, y: -1 },
+        })
+        .collect();
+    ResolvedAsset {
+        depot: "mx_keys_mini".to_string(),
+        display_name: "MX Keys Mini".to_string(),
+        kind: Some(DeviceKind::Keyboard),
+        image_path: PathBuf::from("/tmp/mx-keys-mini.png"),
+        hero_image_path: None,
+        glow: None,
+        metadata: Metadata {
+            images: vec![ImageEntry {
+                key: "device_keys_image".to_string(),
+                origin: Origin {
+                    width: 1872,
+                    height: 728,
+                },
+                assignments,
+            }],
         },
         png_width: 1872,
         png_height: 728,

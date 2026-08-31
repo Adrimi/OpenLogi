@@ -14,8 +14,8 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_F1, VK_LWIN, VK_MENU, VK_RWIN,
-    VK_SHIFT,
+    GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_F1, VK_INSERT, VK_LWIN, VK_MENU,
+    VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
@@ -542,8 +542,8 @@ unsafe fn key_hook_data(lparam: LPARAM) -> Option<KBDLLHOOKSTRUCT> {
 
 /// Translate a `WH_KEYBOARD_LL` message into a [`KeyEvent`]. Returns `None`
 /// for injected input (our own `SendInput` synthesis must not re-enter the
-/// remapper) and for keys outside the remapper's Esc/F1–F19 vocabulary, which
-/// pass through without ever reaching the callback.
+/// remapper) and for keys outside the remapper's Esc/F1–F19/Insert
+/// vocabulary, which pass through without ever reaching the callback.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "WPARAM is pointer-sized by ABI but carries a 32-bit message id"
@@ -579,11 +579,14 @@ const FKEY_MAC_KEYCODES: [u16; 19] = [
 ];
 
 /// Map a Windows virtual-key code to the macOS keycode [`KeyEvent`] carries,
-/// or `None` for keys outside the Esc/F1–F19 set.
+/// or `None` for keys outside the Esc/F1–F19/Insert set.
 fn mac_keycode(vk: u32) -> Option<u16> {
     let vk = u16::try_from(vk).ok()?;
     if vk == VK_ESCAPE {
         return Some(0x35);
+    }
+    if vk == VK_INSERT {
+        return Some(0x72);
     }
     FKEY_MAC_KEYCODES
         .get(usize::from(vk.checked_sub(VK_F1)?))
@@ -677,6 +680,8 @@ mod tests {
 
         let esc: KeyTrigger = "esc".parse().expect("parse key trigger");
         assert_eq!(mac_keycode(u32::from(VK_ESCAPE)), Some(esc.keycode));
+        let ins: KeyTrigger = "ins".parse().expect("parse key trigger");
+        assert_eq!(mac_keycode(u32::from(VK_INSERT)), Some(ins.keycode));
         for n in 1..=19u16 {
             let trigger: KeyTrigger = format!("f{n}").parse().expect("parse key trigger");
             assert_eq!(

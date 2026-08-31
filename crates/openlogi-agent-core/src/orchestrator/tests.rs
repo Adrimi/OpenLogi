@@ -46,6 +46,73 @@ fn dev(key: &str, slot: u8, online: bool) -> AgentDevice {
     }
 }
 
+fn keyboard_dev(key: &str) -> AgentDevice {
+    AgentDevice {
+        config_key: key.to_string(),
+        model_key: "MX Keys Mini".to_string(),
+        route: Some(DeviceRoute::Direct {
+            vendor_id: 0x046d,
+            product_id: 0xb369,
+        }),
+        slot: DIRECT_DEVICE_INDEX,
+        serial: Some("keyboard".to_string()),
+        unit_id: [0; 4],
+        capabilities: None,
+        kind: DeviceKind::Keyboard,
+        light_capabilities: None,
+        online: true,
+    }
+}
+
+#[test]
+fn keyboard_spec_maps_global_f_keys_to_physical_positions() {
+    let mut config = Config::default();
+    config.set_keyboard_binding("f4".parse().expect("F4 trigger"), Some(Action::VolumeDown));
+    config.set_keyboard_binding("f5".parse().expect("F5 trigger"), Some(Action::PlayPause));
+    config.set_keyboard_binding(
+        "ins".parse().expect("Insert trigger"),
+        Some(Action::VolumeUp),
+    );
+    let mut orchestrator = orchestrator(config);
+    orchestrator.devices = vec![keyboard_dev("keyboard")];
+
+    let spec = orchestrator.keyboard_spec_for().expect("keyboard spec");
+
+    assert_eq!(
+        spec.wanted,
+        std::collections::BTreeMap::from([
+            (4, ButtonId::KeyFunction(4)),
+            (5, ButtonId::KeyFunction(5)),
+            (13, ButtonId::KeyFunction(13)),
+        ])
+    );
+    assert_eq!(
+        spec.bindings.get(&ButtonId::KeyFunction(4)),
+        Some(&Binding::Single(Action::VolumeDown))
+    );
+    assert_eq!(
+        spec.bindings.get(&ButtonId::KeyFunction(5)),
+        Some(&Binding::Single(Action::PlayPause))
+    );
+    assert_eq!(
+        spec.bindings.get(&ButtonId::KeyFunction(13)),
+        Some(&Binding::Single(Action::VolumeUp))
+    );
+}
+
+#[test]
+fn modified_function_key_binding_stays_on_the_os_hook() {
+    let mut config = Config::default();
+    config.set_keyboard_binding(
+        "shift+f4".parse().expect("modified F4 trigger"),
+        Some(Action::VolumeDown),
+    );
+    let mut orchestrator = orchestrator(config);
+    orchestrator.devices = vec![keyboard_dev("keyboard")];
+
+    assert!(orchestrator.keyboard_spec_for().is_none());
+}
+
 fn raw_light_dev(key: &str) -> AgentDevice {
     AgentDevice {
         config_key: key.to_string(),

@@ -52,10 +52,9 @@ use gpui::ease_in_out;
 use gpui::{Animation, AnimationExt, img};
 
 /// The full programmable top row: Esc, then F1-F19. Each entry is the display
-/// label (on the key) + the [`KeyTrigger`] keycode it binds. MX Keys-class
-/// boards expose all 20; boards with a shorter F-row (a G513 has F1-F12)
-/// surface a prefix of this list, sized by the asset's key markers — see
-/// [`key_points`].
+/// label (on the key) + the [`KeyTrigger`] keycode it binds. Generic full-size
+/// boards can expose all 20; model-specific layouts such as MX Keys Mini are
+/// resolved separately from their named metadata slots.
 const FUNCTION_KEYS: [(&str, u16); 20] = [
     ("Esc", 0x35),
     ("F1", 0x7A),
@@ -77,6 +76,19 @@ const FUNCTION_KEYS: [(&str, u16); 20] = [
     ("F17", 0x40),
     ("F18", 0x4F),
     ("F19", 0x50),
+];
+
+const MX_KEYS_MINI_KEYS: [(&str, u16, &str); 10] = [
+    ("F4", 0x76, "SLOT_NAME_BACKLIGHT_DOWN"),
+    ("F5", 0x60, "SLOT_NAME_BACKLIGHT_UP"),
+    ("F6", 0x61, "SLOT_NAME_DICTATION"),
+    ("F7", 0x62, "SLOT_NAME_EMOJI"),
+    ("F8", 0x64, "SLOT_NAME_SCREEN_CAPTURE"),
+    ("F9", 0x65, "SLOT_NAME_MUTE_UNMUTE_AUDIO"),
+    ("F10", 0x6D, "SLOT_NAME_PLAY_PAUSE"),
+    ("F11", 0x67, "SLOT_NAME_MUTE"),
+    ("F12", 0x6F, "SLOT_NAME_VOLUME_DOWN"),
+    ("Ins", 0x72, "SLOT_NAME_VOLUME_UP"),
 ];
 
 /// Width of the config panel (CSS px) when a key is selected.
@@ -253,15 +265,13 @@ impl Render for FunctionRowView {
 
         let viewport_h = f32::from(window.viewport_size().height);
         let render_size = keyboard_render_size(asset, viewport_h);
-        let points = key_points(asset);
         let image_path = asset.map(|asset| asset.image_path.clone());
-        let slots: Vec<KeySlot> = FUNCTION_KEYS
-            .iter()
-            .zip(points.iter())
+        let slots: Vec<KeySlot> = key_layout(asset)
+            .into_iter()
             .enumerate()
-            .map(|(idx, ((label, keycode), point))| {
+            .map(|(idx, (label, keycode, point))| {
                 let trigger = KeyTrigger {
-                    keycode: *keycode,
+                    keycode,
                     modifiers: KeyModifiers::default(),
                 };
                 let bound = bindings.and_then(|bindings| bindings.get(&trigger));
@@ -995,6 +1005,48 @@ fn key_points(asset: Option<&ResolvedAsset>) -> Vec<KeyPoint> {
     fallback_key_points()
 }
 
+fn key_layout(asset: Option<&ResolvedAsset>) -> Vec<(&'static str, u16, KeyPoint)> {
+    if let Some(asset) = asset.filter(|asset| asset.depot == "mx_keys_mini") {
+        let assignments = asset
+            .metadata
+            .images
+            .iter()
+            .find(|image| image.key == "device_keys_image")
+            .map(|image| image.assignments.as_slice())
+            .unwrap_or_default();
+        let layout: Vec<_> = MX_KEYS_MINI_KEYS
+            .iter()
+            .filter_map(|&(label, keycode, slot_name)| {
+                let assignment = assignments
+                    .iter()
+                    .find(|assignment| assignment.slot_name == slot_name)?;
+                Some((
+                    label,
+                    keycode,
+                    calibrated_marker_point(KeyPoint {
+                        x_frac: assignment.marker.x / 100.0,
+                        y_frac: assignment.marker.y / 100.0,
+                    }),
+                ))
+            })
+            .collect();
+        if layout.len() == MX_KEYS_MINI_KEYS.len() {
+            return layout;
+        }
+        return MX_KEYS_MINI_KEYS
+            .iter()
+            .zip(fallback_points_for(MX_KEYS_MINI_KEYS.len()))
+            .map(|(&(label, keycode, _), point)| (label, keycode, point))
+            .collect();
+    }
+
+    FUNCTION_KEYS
+        .iter()
+        .zip(key_points(asset))
+        .map(|(&(label, keycode), point)| (label, keycode, point))
+        .collect()
+}
+
 #[cfg(test)]
 fn key_x_fractions(asset: Option<&ResolvedAsset>) -> Vec<f32> {
     key_points(asset)
@@ -1118,20 +1170,18 @@ fn synthesized_esc_x(first_function_key_x: f32) -> f32 {
     (first_function_key_x - 0.045).max(0.02)
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "FUNCTION_KEYS is a fixed table of a dozen entries"
-)]
-fn fallback_key_x_fractions() -> Vec<f32> {
-    let step = (EVEN_SPACING_END - EVEN_SPACING_START) / (FUNCTION_KEYS.len() - 1) as f32;
-    (0..FUNCTION_KEYS.len())
-        .map(|i| EVEN_SPACING_START + (i as f32) * step)
-        .collect()
+fn fallback_key_points() -> Vec<KeyPoint> {
+    fallback_points_for(FUNCTION_KEYS.len())
 }
 
-fn fallback_key_points() -> Vec<KeyPoint> {
-    fallback_key_x_fractions()
-        .into_iter()
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the top row contains at most a couple of dozen keys"
+)]
+fn fallback_points_for(count: usize) -> Vec<KeyPoint> {
+    let step = (EVEN_SPACING_END - EVEN_SPACING_START) / (count.saturating_sub(1).max(1)) as f32;
+    (0..count)
+        .map(|index| EVEN_SPACING_START + (index as f32) * step)
         .map(|x_frac| KeyPoint {
             x_frac,
             y_frac: FALLBACK_KEY_Y_FRAC,

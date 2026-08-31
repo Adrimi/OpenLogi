@@ -39,8 +39,8 @@ pub struct KeyboardSpec {
     pub config_key: String,
     /// HID++ route of the keyboard.
     pub route: DeviceRoute,
-    /// `0x1b04` control ID → button, for exactly the bound keys.
-    pub wanted: BTreeMap<u16, ButtonId>,
+    /// Physical F-key position → button, for exactly the bound keys.
+    pub wanted: BTreeMap<u8, ButtonId>,
     /// Effective per-key immediate or threshold map (per-app overlay applied).
     pub bindings: BTreeMap<ButtonId, Binding>,
 }
@@ -53,7 +53,7 @@ pub type SharedKeyboardSpec = watch::Receiver<Option<Arc<KeyboardSpec>>>;
 #[derive(Clone, PartialEq, Eq)]
 struct KeyboardTarget {
     route: DeviceRoute,
-    wanted: BTreeMap<u16, ButtonId>,
+    wanted: BTreeMap<u8, ButtonId>,
 }
 
 impl KeyboardTarget {

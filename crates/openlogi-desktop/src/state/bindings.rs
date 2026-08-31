@@ -30,7 +30,7 @@ pub(super) struct BindingState {
     button_bindings: BTreeMap<ButtonId, Action>,
     /// Device-global per-direction gesture bindings.
     gesture_bindings: BTreeMap<ButtonId, BTreeMap<GestureDirection, Action>>,
-    /// Global keyboard F-key bindings (Esc + F1-F19).
+    /// Global keyboard top-row bindings (Esc, F1-F19, and Insert).
     keyboard_bindings: BTreeMap<KeyTrigger, Action>,
 }
 

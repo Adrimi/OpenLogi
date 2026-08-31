@@ -752,6 +752,7 @@ mod tests {
             cid: 0x1234,
             task_id: 0x00af,
             flags: 0,
+            position: 0,
         };
         assert_eq!(host_channel(info), Some(1));
     }

@@ -58,7 +58,7 @@ pub use session::host_switch::{
     HostSwitchError, HostSwitchStopReason, run_host_switch_session, switch_linked_hosts,
 };
 pub use session::keyboard::{
-    KEYBOARD_KEY_CIDS, run_keyboard_capture_session, run_keyboard_capture_session_with_registry,
+    run_keyboard_capture_session, run_keyboard_capture_session_with_registry,
 };
 pub use write::{
     Dpi, DpiCapabilities, DpiInfo, FeatureEntry, FirmwareEntity, FirmwareEntityInfo,

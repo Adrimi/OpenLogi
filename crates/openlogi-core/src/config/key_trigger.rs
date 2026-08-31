@@ -41,7 +41,8 @@ impl KeyModifiers {
 /// A keyboard trigger: a keycode plus an optional modifier mask. The parse
 /// format is `[mod+]+key`, e.g. `"f1"`, `"shift+cmd+f5"`. Modifier names:
 /// `shift`, `control` (alias `ctrl`), `option` (alias `alt`), `command`
-/// (alias `cmd`). Key names: `esc`, `f1`..`f19` (macOS virtual keycodes).
+/// (alias `cmd`). Key names: `esc`, `f1`..`f19`, and `ins` (alias `insert`;
+/// macOS virtual keycodes).
 ///
 /// Serializes as its string form (via `Display`) so it can be a TOML map key:
 /// `[keyboard.bindings]` keys are `"f1"`, `"shift+f2"`, etc.
@@ -100,6 +101,7 @@ fn keycode_to_name(code: u16) -> Option<&'static str> {
         0x40 => "f17",
         0x4F => "f18",
         0x50 => "f19",
+        0x72 => "ins",
         _ => return None,
     })
 }
@@ -162,6 +164,7 @@ impl std::str::FromStr for KeyTrigger {
             "f17" => 0x40,
             "f18" => 0x4F,
             "f19" => 0x50,
+            "ins" | "insert" => 0x72,
             other => return Err(ParseTriggerError(format!("unknown key '{other}'"))),
         };
         Ok(KeyTrigger {
