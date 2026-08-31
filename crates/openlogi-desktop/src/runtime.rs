@@ -183,7 +183,7 @@ pub(crate) fn spawn(startup: Startup, cx: &mut gpui::App) {
 /// stays an explicit toggle.
 #[cfg(target_os = "macos")]
 fn ensure_registration_at_startup(cx: &mut gpui::AsyncApp) {
-    if openlogi_core::paths::is_dev_profile() {
+    if !crate::platform::registration::may_register_implicitly() {
         return;
     }
     cx.background_executor()

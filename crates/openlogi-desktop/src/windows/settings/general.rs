@@ -17,10 +17,43 @@ pub(super) struct SensitivitySliders {
     pub(super) thumbwheel: Entity<SliderState>,
 }
 
-pub(super) fn general_page(
-    sliders: SensitivitySliders,
-    registration_status: ServiceStatus,
-) -> SettingPage {
+/// What the page needs to know about the agent's login item: what launchd
+/// reports, and what the user asked for. Both are needed — "start at login"
+/// being on is only a promise if something is actually registered to keep it.
+#[derive(Clone, Copy)]
+pub(super) struct LoginItemState {
+    pub(super) status: ServiceStatus,
+    pub(super) launch_at_login: bool,
+}
+
+/// What the Login Items area should warn about, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginNotice {
+    /// The user switched the item off under System Settings › Login Items.
+    /// macOS is overriding the switch on this page.
+    NeedsApproval,
+    /// The switch says "start at login" but nothing is registered to do it.
+    /// A reboot then leaves the agent — and every binding — down, with the
+    /// switch still claiming otherwise.
+    NotRegistered,
+}
+
+/// Decide which notice the Login Items area owes the user.
+///
+/// `RequiresApproval` is reported whatever the switch says: macOS is
+/// overriding it either way. The unregistered states are only a problem when
+/// the user actually asked to start at login.
+fn login_notice(state: LoginItemState) -> Option<LoginNotice> {
+    match state.status {
+        ServiceStatus::RequiresApproval => Some(LoginNotice::NeedsApproval),
+        ServiceStatus::NotRegistered | ServiceStatus::NotFound if state.launch_at_login => {
+            Some(LoginNotice::NotRegistered)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn general_page(sliders: SensitivitySliders, login_item: LoginItemState) -> SettingPage {
     let SensitivitySliders {
         vertical_scroll,
         thumbwheel,
@@ -51,13 +84,14 @@ pub(super) fn general_page(
         )
         .item(launch_at_login_item());
 
-    // Switched off under System Settings › Login Items: nothing can start
-    // the service until the user flips it back on there — surface it instead
-    // of letting the switch above claim a state macOS is overriding.
-    let group = if registration_status == ServiceStatus::RequiresApproval {
-        group.item(login_item_approval_notice())
-    } else {
-        group
+    // The switch above is a preference, not a guarantee: it is the launchd
+    // registration that actually starts the agent. Say so when the two
+    // disagree, rather than letting the switch claim a state the system is
+    // not honouring.
+    let group = match login_notice(login_item) {
+        Some(LoginNotice::NeedsApproval) => group.item(login_item_approval_notice()),
+        Some(LoginNotice::NotRegistered) => group.item(login_item_missing_notice()),
+        None => group,
     };
 
     // One `show_in_menu_bar` setting drives the macOS status item and the
@@ -206,6 +240,44 @@ fn login_item_approval_notice() -> SettingItem {
     ))
 }
 
+/// "Start at login" is on, but nothing is registered to honour it — the shape
+/// that leaves every binding dead after a reboot while the switch still reads
+/// as enabled.
+fn login_item_missing_notice() -> SettingItem {
+    SettingItem::new(
+        tr!("Not registered to start at login"),
+        SettingField::render(|_, _, cx| register_login_item_button(cx)),
+    )
+    .description(tr!(
+        "OpenLogi is set to start at login, but its background agent is not registered with macOS, so a restart leaves it — and your key bindings — switched off until you open the app."
+    ))
+}
+
+/// Retry the registration the startup path could not complete. The row
+/// refreshes on the next window activation, which is what already re-reads
+/// the status after a trip to System Settings.
+fn register_login_item_button(cx: &App) -> BaseButton {
+    let pal = theme::palette(cx);
+    BaseButton::new("register-login-item")
+        .accessibility_label(tr!("Register"))
+        .px_2()
+        .py_1()
+        .rounded(pal.control_radius)
+        .border_1()
+        .border_color(pal.border)
+        .text_caption()
+        .cursor_pointer()
+        .bg(pal.control)
+        .hover(move |s| s.bg(pal.control_hover))
+        .focus_visible(move |s| s.bg(pal.control_hover))
+        .child(tr!("Register"))
+        .on_click(|_, _, _| {
+            if let Err(error) = crate::platform::registration::ensure_registered() {
+                tracing::warn!(error, "manual login-item registration failed");
+            }
+        })
+}
+
 /// Deep link to System Settings › Login Items — the only place that can
 /// re-enable a service switched off there.
 fn open_login_items_button(cx: &App) -> BaseButton {
@@ -224,4 +296,55 @@ fn open_login_items_button(cx: &App) -> BaseButton {
         .focus_visible(move |s| s.bg(pal.control_hover))
         .child(tr!("Open Login Items"))
         .on_click(|_, _, _| crate::platform::registration::open_login_items_settings())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LoginItemState, LoginNotice, ServiceStatus, login_notice};
+
+    fn state(status: ServiceStatus, launch_at_login: bool) -> LoginItemState {
+        LoginItemState {
+            status,
+            launch_at_login,
+        }
+    }
+
+    #[test]
+    fn a_registered_service_needs_no_notice() {
+        assert_eq!(login_notice(state(ServiceStatus::Enabled, true)), None);
+    }
+
+    #[test]
+    fn wanting_login_start_without_a_registration_is_surfaced() {
+        // The reboot case: the switch reads "on", nothing is registered, and
+        // without this the user only finds out because their keyboard stopped
+        // working.
+        assert_eq!(
+            login_notice(state(ServiceStatus::NotRegistered, true)),
+            Some(LoginNotice::NotRegistered)
+        );
+        assert_eq!(
+            login_notice(state(ServiceStatus::NotFound, true)),
+            Some(LoginNotice::NotRegistered)
+        );
+    }
+
+    #[test]
+    fn not_wanting_login_start_makes_an_absent_registration_expected() {
+        assert_eq!(
+            login_notice(state(ServiceStatus::NotRegistered, false)),
+            None
+        );
+    }
+
+    #[test]
+    fn an_override_in_system_settings_is_surfaced_whatever_the_switch_says() {
+        // macOS wins either way, so this one does not consult the preference.
+        for launch_at_login in [true, false] {
+            assert_eq!(
+                login_notice(state(ServiceStatus::RequiresApproval, launch_at_login)),
+                Some(LoginNotice::NeedsApproval)
+            );
+        }
+    }
 }

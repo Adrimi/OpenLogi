@@ -495,7 +495,11 @@ impl Render for SettingsView {
                     vertical_scroll: self.vertical_scroll_sensitivity_slider.clone(),
                     thumbwheel: self.thumbwheel_sensitivity_slider.clone(),
                 },
-                self.registration_status,
+                general::LoginItemState {
+                    status: self.registration_status,
+                    launch_at_login: AppState::try_read(cx)
+                        .is_some_and(|state| state.app_settings().launch_at_login),
+                },
             ))
             .page(updates::updates_page(self.updater.clone()));
         // Registered only where grants exist to manage — see the `mod

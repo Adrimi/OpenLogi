@@ -46,7 +46,7 @@ pub(super) fn spawn_agent() {
         // and the re-run kickstart doubles as the "did it take?" check. Dev
         // profiles never register implicitly (a login item into `target/`
         // goes stale).
-        if !openlogi_core::paths::is_dev_profile() {
+        if crate::platform::registration::may_register_implicitly() {
             match crate::platform::registration::ensure_registered() {
                 Ok(()) => {
                     if kickstart_registered_agent() {
