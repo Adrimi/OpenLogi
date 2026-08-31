@@ -325,6 +325,7 @@ impl Orchestrator {
             route: dev.route.clone()?,
             wanted,
             bindings,
+            rearm_generation: self.shared.capture_rearm_generation.load(Ordering::Relaxed),
         })
     }
 
@@ -367,11 +368,37 @@ impl Orchestrator {
             host_switch_links(&self.config, &self.devices),
             "host_switch_links",
         );
-        write_value(
-            &self.shared.keyboard_spec,
-            self.keyboard_spec_for(),
-            "keyboard_spec",
-        );
+        self.publish_keyboard_spec();
+    }
+
+    /// Publish the keyboard capture spec, logging every change to what is
+    /// actually being captured.
+    ///
+    /// This is the single fact the capture watcher acts on, and it used to
+    /// change silently: a keyboard dropping out of the spec — or coming back —
+    /// left no trace, which made "bindings stopped working overnight"
+    /// impossible to tell apart from "the watcher could not arm".
+    fn publish_keyboard_spec(&self) {
+        let next = self.keyboard_spec_for();
+        let describe = |spec: Option<&KeyboardSpec>| match spec {
+            None => "none".to_owned(),
+            Some(spec) => format!(
+                "{} keys={} generation={}",
+                spec.config_key,
+                spec.wanted.len(),
+                spec.rearm_generation
+            ),
+        };
+        let next_described = describe(next.as_ref());
+        let changed = match self.shared.keyboard_spec.read() {
+            Ok(guard) => describe(guard.as_ref()) != next_described,
+            // Poisoned: report it rather than silently skipping the line.
+            Err(_) => true,
+        };
+        if changed {
+            info!(spec = %next_described, "keyboard capture spec changed");
+        }
+        write_value(&self.shared.keyboard_spec, next, "keyboard_spec");
     }
 
     /// Rewrite the per-device DPI-cycle map for every online device,

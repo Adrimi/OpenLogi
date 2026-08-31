@@ -107,6 +107,42 @@ fn keyboard_spec_maps_global_f_keys_to_physical_positions() {
 }
 
 #[test]
+fn the_keyboard_spec_carries_the_capture_rearm_generation() {
+    // `refresh_inventory` bumps this counter whenever a device power-cycles —
+    // a reconnect, a replug, or a system wake, none of which change the
+    // device set, the routes, or the online flags. Carrying it in the spec is
+    // the only thing that tells the capture watcher to restart, and the
+    // firmware drops every diverted key across such a power cycle: a session
+    // that survives it holds keys the device has already taken back.
+    let mut config = Config::default();
+    config.set_keyboard_binding(
+        "f4".parse().expect("F4 trigger"),
+        Some(Action::BrightnessDown),
+    );
+    let mut orchestrator = orchestrator(config);
+    orchestrator.devices = vec![keyboard_dev("keyboard")];
+    let before = orchestrator
+        .keyboard_spec_for()
+        .expect("keyboard spec")
+        .rearm_generation;
+
+    orchestrator
+        .shared
+        .capture_rearm_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    let after = orchestrator
+        .keyboard_spec_for()
+        .expect("keyboard spec")
+        .rearm_generation;
+    assert_ne!(
+        before, after,
+        "the spec must follow the generation, or a power-cycled keyboard \
+         keeps a session whose diversions the firmware already dropped"
+    );
+}
+
+#[test]
 fn modified_function_key_binding_stays_on_the_os_hook() {
     let mut config = Config::default();
     config.set_keyboard_binding(
