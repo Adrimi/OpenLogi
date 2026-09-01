@@ -375,6 +375,7 @@ fn persisted_action_variant_names_are_stable() {
         "ShowActionsRing",
         "ShowDesktop",
         "Sleep",
+        "ToggleDarkMode",
         "ToggleSmartShift",
         "TypeText",
         "Undo",
@@ -384,6 +385,17 @@ fn persisted_action_variant_names_are_stable() {
     ];
     expected.sort_unstable();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn toggling_dark_mode_is_a_system_action_with_a_native_effect() {
+    // The switch has no chord and no key event on any OS: each backend
+    // reaches it (or declines to) through its own native path.
+    assert_eq!(Action::ToggleDarkMode.category(), Category::System);
+    assert_matches!(
+        Action::ToggleDarkMode.effect(),
+        Effect::Native(NativeAction::ToggleAppearance)
+    );
 }
 
 #[test]

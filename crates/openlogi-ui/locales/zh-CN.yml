@@ -237,6 +237,7 @@ _version: 1
 "Lock Screen": "锁定屏幕"
 "Screenshot": "截屏"
 "Sleep": "睡眠"
+"Toggle Dark Mode": "切换深色模式"
 "Capture Region": "截取区域"
 "Play / Pause": "播放 / 暂停"
 "Next Track": "下一首"

@@ -168,6 +168,13 @@ fn dispatch_native(action: &Action, native: NativeAction) {
         }
         // logind Suspend() via the system bus.
         NativeAction::Sleep => sleep_system(),
+        // There is no cross-desktop appearance switch: GNOME keeps it in
+        // `org.gnome.desktop.interface color-scheme`, KDE in a colour scheme
+        // applied through `plasma-apply-colorscheme`, and the rest vary
+        // again. Bind a shell command for a specific desktop instead.
+        NativeAction::ToggleAppearance => {
+            tracing::debug!("no cross-desktop appearance switch on Linux — action skipped");
+        }
     }
 }
 

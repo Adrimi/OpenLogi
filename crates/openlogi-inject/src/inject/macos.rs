@@ -146,6 +146,7 @@ fn dispatch_native(native: NativeAction) {
         // synthesised power key), so ask powermanagement directly. `pmset
         // sleepnow` works for the console user without privileges.
         NativeAction::Sleep => sleep_system(),
+        NativeAction::ToggleAppearance => toggle_appearance(),
     }
 }
 
@@ -1144,6 +1145,7 @@ pub(super) fn ax_browser_navigate(forward: bool, pid: Option<i32>) -> bool {
     .is_some()
 }
 
+use appearance::toggle_appearance;
 use dock::{app_expose, launchpad, mission_control, show_desktop};
 use symbolic_hotkey::{next_desktop, previous_desktop};
 
@@ -1163,16 +1165,28 @@ mod app_services {
     /// handle for the process lifetime. Returns `None` if the framework or
     /// symbol is unavailable on this macOS version.
     pub(super) fn symbol(symbol: &CStr) -> Option<*mut c_void> {
-        const RTLD_LAZY: c_int = 0x1;
         const APP_SERVICES: &CStr =
             c"/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices";
         static HANDLE: OnceLock<usize> = OnceLock::new();
 
-        // SAFETY: `dlopen`/`dlsym` come from libSystem; APP_SERVICES and
+        symbol_in(APP_SERVICES, &HANDLE, symbol)
+    }
+
+    /// The same resolution against an arbitrary framework, so a second
+    /// private framework can reuse this FFI instead of repeating it. Each
+    /// caller owns the `OnceLock` its handle is cached in.
+    pub(super) fn symbol_in(
+        framework: &CStr,
+        handle: &'static OnceLock<usize>,
+        symbol: &CStr,
+    ) -> Option<*mut c_void> {
+        const RTLD_LAZY: c_int = 0x1;
+
+        // SAFETY: `dlopen`/`dlsym` come from libSystem; `framework` and
         // `symbol` are valid C strings. The handle is cached and
         // intentionally never closed.
         let sym = unsafe {
-            let handle = *HANDLE.get_or_init(|| dlopen(APP_SERVICES.as_ptr(), RTLD_LAZY) as usize);
+            let handle = *handle.get_or_init(|| dlopen(framework.as_ptr(), RTLD_LAZY) as usize);
             if handle == 0 {
                 return None;
             }
@@ -1184,6 +1198,70 @@ mod app_services {
     unsafe extern "C" {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
         fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+}
+
+/// The Dark/Light system appearance.
+///
+/// There is no public API for writing it: `NSAppearance` describes one
+/// process, and writing `AppleInterfaceStyle` with `defaults` leaves running
+/// apps on the old theme until they restart. SkyLight's appearance SPI is the
+/// one System Settings itself drives, so reading it and writing back the
+/// negation flips every app at once and stays in step with a change the user
+/// made elsewhere.
+///
+/// Isolated in its own submodule so the `unsafe` the `dlopen`/`dlsym` FFI
+/// needs stays scoped to it.
+#[expect(
+    unsafe_code,
+    reason = "the private SkyLight appearance SPI is only reachable via dlopen/dlsym FFI"
+)]
+mod appearance {
+    use std::ffi::{CStr, c_void};
+    use std::sync::OnceLock;
+
+    use super::app_services::symbol_in;
+
+    /// Flip the system appearance. A no-op with a warning when the SPI is
+    /// missing, the way every other private-SPI helper here degrades.
+    pub(super) fn toggle_appearance() {
+        let Some(api) = appearance_api() else {
+            tracing::warn!("SkyLight appearance SPI unavailable — appearance left unchanged");
+            return;
+        };
+
+        // SAFETY: resolved SkyLight symbols called with the signatures
+        // declared below; neither takes a pointer.
+        let dark = unsafe { (api.get_theme)() };
+        // SAFETY: as above.
+        unsafe { (api.set_theme)(!dark) };
+        tracing::debug!(dark = !dark, "system appearance toggled");
+    }
+
+    #[derive(Clone, Copy)]
+    struct AppearanceApi {
+        get_theme: SlsGetAppearanceThemeFn,
+        set_theme: SlsSetAppearanceThemeFn,
+    }
+
+    type SlsGetAppearanceThemeFn = unsafe extern "C" fn() -> bool;
+    type SlsSetAppearanceThemeFn = unsafe extern "C" fn(bool);
+
+    fn appearance_api() -> Option<AppearanceApi> {
+        const SKY_LIGHT: &CStr = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
+        static HANDLE: OnceLock<usize> = OnceLock::new();
+
+        let get_theme = symbol_in(SKY_LIGHT, &HANDLE, c"SLSGetAppearanceThemeLegacy")?;
+        let set_theme = symbol_in(SKY_LIGHT, &HANDLE, c"SLSSetAppearanceThemeLegacy")?;
+
+        // SAFETY: the symbols, when present, have the private SPI signatures
+        // declared above.
+        Some(unsafe {
+            AppearanceApi {
+                get_theme: std::mem::transmute::<*mut c_void, SlsGetAppearanceThemeFn>(get_theme),
+                set_theme: std::mem::transmute::<*mut c_void, SlsSetAppearanceThemeFn>(set_theme),
+            }
+        })
     }
 }
 

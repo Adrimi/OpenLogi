@@ -63,7 +63,8 @@ pub use succession::Identity;
 ///      the macOS dormancy gate.
 /// v30: [`Agent::restart_after_input_monitoring_change`] appended.
 /// v31: [`Agent::request_input_monitoring_access`] appended.
-pub const PROTOCOL_VERSION: u32 = 31;
+/// v32: `Action::ToggleDarkMode` appended for the system appearance switch.
+pub const PROTOCOL_VERSION: u32 = 32;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to

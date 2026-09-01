@@ -195,6 +195,10 @@ pub enum NativeAction {
     CaptureRegion,
     /// Put the computer to sleep.
     Sleep,
+    /// Flip the system appearance between its dark and light variants.
+    /// macOS reads and writes the window server's own appearance state;
+    /// Linux and Windows have no single equivalent and log a no-op.
+    ToggleAppearance,
 }
 
 /// A power-user scripting escape hatch, borrowed from the originating
@@ -256,6 +260,7 @@ impl Action {
             Action::Screenshot => Effect::Native(NativeAction::Screenshot),
             Action::CaptureRegion => Effect::Native(NativeAction::CaptureRegion),
             Action::Sleep => Effect::Native(NativeAction::Sleep),
+            Action::ToggleDarkMode => Effect::Native(NativeAction::ToggleAppearance),
 
             Action::PlayPause => Effect::Media(MediaKey::PlayPause),
             Action::NextTrack => Effect::Media(MediaKey::NextTrack),

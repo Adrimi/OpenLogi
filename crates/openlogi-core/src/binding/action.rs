@@ -204,6 +204,14 @@ pub enum Action {
     KeyboardBacklightUp,
     /// Lower the keyboard's own backlight one level over HID++ `0x1982`.
     KeyboardBacklightDown,
+    /// Flip macOS between its Dark and Light appearance, one press per
+    /// switch.
+    ///
+    /// The appearance is read back from the window server before it is
+    /// written, so the toggle stays in step with a change the user made in
+    /// System Settings or with another tool. Appended here because the serde
+    /// variant index is the wire format (see the stability contract above).
+    ToggleDarkMode,
 }
 
 /// One step in a [`Action::Workflow`]. A workflow is a `Vec<WorkflowStep>`
@@ -286,6 +294,7 @@ macro_rules! for_each_unit_action {
             Screenshot "Screenshot" System Camera,
             CaptureRegion "Capture Region" System Camera,
             Sleep "Sleep" System Monitor,
+            ToggleDarkMode "Toggle Dark Mode" System Palette,
             ShowActionsRing "Actions Ring" System Grid not_pickable,
             // Media
             PlayPause "Play / Pause" Media Play,

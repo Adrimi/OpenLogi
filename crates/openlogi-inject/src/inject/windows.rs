@@ -146,6 +146,12 @@ fn dispatch_native(native: NativeAction) {
         NativeAction::Sleep => {
             tracing::debug!("Sleep has no Windows synthesis yet — action skipped");
         }
+        // Windows keeps the theme in `AppsUseLightTheme`/`SystemUsesLightTheme`
+        // under HKCU and expects a settings-change broadcast, which is a
+        // registry concern rather than an input event.
+        NativeAction::ToggleAppearance => {
+            tracing::debug!("appearance switching has no Windows synthesis yet — action skipped");
+        }
     }
 }
 
