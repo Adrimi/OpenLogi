@@ -199,6 +199,9 @@ pub enum NativeAction {
     /// macOS reads and writes the window server's own appearance state;
     /// Linux and Windows have no single equivalent and log a no-op.
     ToggleAppearance,
+    /// Mute or unmute the default audio input. macOS writes the device's
+    /// CoreAudio mute property; Linux and Windows log a no-op.
+    ToggleMicrophoneMute,
 }
 
 /// A power-user scripting escape hatch, borrowed from the originating
@@ -261,6 +264,7 @@ impl Action {
             Action::CaptureRegion => Effect::Native(NativeAction::CaptureRegion),
             Action::Sleep => Effect::Native(NativeAction::Sleep),
             Action::ToggleDarkMode => Effect::Native(NativeAction::ToggleAppearance),
+            Action::MuteMicrophone => Effect::Native(NativeAction::ToggleMicrophoneMute),
 
             Action::PlayPause => Effect::Media(MediaKey::PlayPause),
             Action::NextTrack => Effect::Media(MediaKey::NextTrack),

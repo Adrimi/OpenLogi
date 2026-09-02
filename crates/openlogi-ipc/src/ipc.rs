@@ -64,7 +64,8 @@ pub use succession::Identity;
 /// v30: [`Agent::restart_after_input_monitoring_change`] appended.
 /// v31: [`Agent::request_input_monitoring_access`] appended.
 /// v32: `Action::ToggleDarkMode` appended for the system appearance switch.
-pub const PROTOCOL_VERSION: u32 = 32;
+/// v33: `Action::MuteMicrophone` appended for the default-input mute switch.
+pub const PROTOCOL_VERSION: u32 = 33;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to

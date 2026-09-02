@@ -152,6 +152,11 @@ fn dispatch_native(native: NativeAction) {
         NativeAction::ToggleAppearance => {
             tracing::debug!("appearance switching has no Windows synthesis yet — action skipped");
         }
+        // Windows exposes capture-device mute through the Core Audio
+        // `IAudioEndpointVolume` COM interface, not through any key event.
+        NativeAction::ToggleMicrophoneMute => {
+            tracing::debug!("microphone muting has no Windows synthesis yet — action skipped");
+        }
     }
 }
 

@@ -175,6 +175,13 @@ fn dispatch_native(action: &Action, native: NativeAction) {
         NativeAction::ToggleAppearance => {
             tracing::debug!("no cross-desktop appearance switch on Linux — action skipped");
         }
+        // Muting the default source is a PulseAudio/PipeWire concern
+        // (`pactl set-source-mute @DEFAULT_SOURCE@ toggle`) rather than an
+        // input event, and neither daemon is guaranteed present. Bind a shell
+        // command for a specific setup instead.
+        NativeAction::ToggleMicrophoneMute => {
+            tracing::debug!("microphone muting has no portable Linux path — action skipped");
+        }
     }
 }
 

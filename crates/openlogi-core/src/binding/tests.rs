@@ -345,6 +345,7 @@ fn persisted_action_variant_names_are_stable() {
         "LeftClick",
         "LockScreen",
         "MiddleClick",
+        "MuteMicrophone",
         "MissionControl",
         "MouseBack",
         "MouseForward",
@@ -395,6 +396,17 @@ fn toggling_dark_mode_is_a_system_action_with_a_native_effect() {
     assert_matches!(
         Action::ToggleDarkMode.effect(),
         Effect::Native(NativeAction::ToggleAppearance)
+    );
+}
+
+#[test]
+fn muting_the_microphone_is_a_native_action() {
+    // There is no microphone key to synthesize on any OS, so this rides the
+    // same native path as the appearance switch rather than a media key.
+    assert_eq!(Action::MuteMicrophone.category(), Category::Media);
+    assert_matches!(
+        Action::MuteMicrophone.effect(),
+        Effect::Native(NativeAction::ToggleMicrophoneMute)
     );
 }
 

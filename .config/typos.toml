@@ -24,6 +24,9 @@ udid = "udid"
 
 [default.extend-words]
 # Technical terms and prefixes accepted in prose and compound identifiers.
+# `inpt` is Apple's four-character code for kAudioDevicePropertyScopeInput:
+# a wire value, not a spelling.
+inpt = "inpt"
 lod = "lod"
 mis = "mis"
 scap = "scap"

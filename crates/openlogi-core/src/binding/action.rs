@@ -212,6 +212,14 @@ pub enum Action {
     /// System Settings or with another tool. Appended here because the serde
     /// variant index is the wire format (see the stability contract above).
     ToggleDarkMode,
+    /// Mute or unmute the system's default audio input, one press per
+    /// switch.
+    ///
+    /// macOS has no microphone key and no global mute of its own, so this is
+    /// a CoreAudio write to the default input device rather than a synthesized
+    /// key. The current state is read back first, which keeps the action in
+    /// step with a change made elsewhere.
+    MuteMicrophone,
 }
 
 /// One step in a [`Action::Workflow`]. A workflow is a `Vec<WorkflowStep>`
@@ -295,6 +303,7 @@ macro_rules! for_each_unit_action {
             CaptureRegion "Capture Region" System Camera,
             Sleep "Sleep" System Monitor,
             ToggleDarkMode "Toggle Dark Mode" System Palette,
+            MuteMicrophone "Mute Microphone" Media MicOff,
             ShowActionsRing "Actions Ring" System Grid not_pickable,
             // Media
             PlayPause "Play / Pause" Media Play,

@@ -86,6 +86,8 @@ pub enum ActionRingIcon {
     VolumeDown,
     /// Muted-volume glyph.
     Mute,
+    /// Muted-microphone glyph.
+    MicOff,
     /// Horizontal scroll-left glyph.
     ScrollLeft,
     /// Horizontal scroll-right glyph.
@@ -165,6 +167,7 @@ impl ActionRingIcon {
             Self::NextTrack => "action-icons/skip-forward.svg",
             Self::VolumeDown => "action-icons/volume-1.svg",
             Self::Mute => "action-icons/volume-x.svg",
+            Self::MicOff => "action-icons/mic-off.svg",
             Self::ScrollLeft => "action-icons/chevrons-left.svg",
             Self::ScrollRight => "action-icons/chevrons-right.svg",
             Self::Folder => "action-icons/folder.svg",
@@ -184,7 +187,7 @@ impl ActionRingIcon {
     }
 
     /// Every icon offered by the Actions Ring editor.
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 55] = [
         Self::Pointer,
         Self::Mouse,
         Self::Copy,
@@ -224,6 +227,7 @@ impl ActionRingIcon {
         Self::NextTrack,
         Self::VolumeDown,
         Self::Mute,
+        Self::MicOff,
         Self::ScrollLeft,
         Self::ScrollRight,
         Self::Folder,
@@ -284,6 +288,7 @@ impl ActionRingIcon {
             Self::NextTrack => "Next Track",
             Self::VolumeDown => "Volume Down",
             Self::Mute => "Mute",
+            Self::MicOff => "Mute Microphone",
             Self::Folder => "Folder",
             Self::File => "File",
             Self::Globe => "Globe",
