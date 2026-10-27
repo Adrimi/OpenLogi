@@ -163,7 +163,7 @@ Reading is **verified on hardware**. The layout below comes from the DLL's
 active stage's DPI are **verified on hardware**: OpenLogi's parser reads
 1000 Hz and 1400 DPI (stage 3 of 5) from the test mouse, matching the dump
 below. The other fields are still **from the vendor DLL, not yet
-hardware-verified**. Writes have **not** been sent to hardware yet.
+hardware-verified**. Writes of the polling rate and the active stage's DPI are **verified on hardware**; other writes are untested.
 
 The image is 0xF0 bytes, read as 24 chunks of 10 bytes with opcode `0x08`.
 
@@ -371,11 +371,17 @@ Rules:
 - Charging flag (`0x04` `payload[1]`): only the value 0 has been observed.
 - Stored kind byte for multimedia buttons; the observed entry `08 04 00` is not
   mapped.
-- Write path (`0x07`): implemented for the active stage's DPI entry and the
-  polling rate, each read back after the write, but not yet exercised on
-  hardware. Whether the firmware needs a commit or reload step after a
-  write is unconfirmed; a read-back mismatch would surface as
-  `DpiNotApplied` / `ReportRateNotApplied`.
+- Write path (`0x07`): **verified on hardware** for the polling rate
+  (1000 → 500 → 1000 Hz) and the active stage's DPI (1400 → 1450 → 1400 via
+  `openlogi api dpi --set`). The firmware needs no commit or reload step: the
+  flash read straight after the write shows the new value, and the mouse
+  follows it. Writes to other fields are still untested.
+- The vendor DLL writes every scalar setting the same way OpenLogi does — a
+  2-byte `(value, check)` pair per call from `CS_ProtocolDataCompareUpdate`
+  (`0x02`–`0x0A`, `0xAB`–`0xF9`) — but never the DPI table; the vendor app
+  builds those packets itself and sends them through
+  `UsbFinderC_ReadWriteDeviceData`. Its exact framing is not decoded, though
+  OpenLogi's single-entry write is accepted.
 - Polling rates above 1000 Hz: offered only when the mouse already reports
   one, because a 1K receiver cannot yet be told apart from a 4K one.
 - Payloads of the 4K-receiver RGB and light-bar commands.
@@ -413,8 +419,8 @@ Rules:
 |---|---|---|
 | Recognition | Standalone inventory, `driver=compx` | **verified on hardware** |
 | Battery | Read on every inventory scan into `StandaloneDevice::battery` (appended to the IPC wire, protocol v42); percentage, level bucket, charging state | **verified on hardware** (20 %, 3612 mV) |
-| DPI | Existing `read_dpi` / `set_dpi` RPCs; `current` is the active stage's X resolution, the offered range is 50–12 800 in steps of 50 | read **verified on hardware**; write not yet |
-| Polling rate | Existing `read_report_rate` / `set_report_rate` RPCs; 125–1000 Hz on a receiver link | read **verified on hardware**; write not yet |
+| DPI | Existing `read_dpi` / `set_dpi` RPCs; `current` is the active stage's X resolution, the offered range is 50–12 800 in steps of 50 | read and write **verified on hardware** |
+| Polling rate | Existing `read_report_rate` / `set_report_rate` RPCs; 125–1000 Hz on a receiver link | read and write **verified on hardware** |
 | SmartShift | Answered as `FeatureUnsupported (0x2110)`, as for a HID++ mouse without the feature | — |
 | `openlogi list` | Prints the battery after the device line | **verified on hardware** |
 
