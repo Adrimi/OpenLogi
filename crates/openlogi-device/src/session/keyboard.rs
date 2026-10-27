@@ -1,12 +1,18 @@
-//! Live key capture for one keyboard: divert the bound F-row controls over
-//! HID++ `0x1b04` and turn their physical edges into [`CapturedInput`] the agent can
-//! dispatch.
+//! Live key capture for one keyboard: divert the bound `0x1b04` controls and
+//! turn their physical edges into [`CapturedInput`] the agent can dispatch.
 //!
 //! [`run_keyboard_capture_session`] is the keyboard counterpart of
-//! [`crate::session::gesture::run_capture_session`]: one open channel, diversion armed
-//! on exactly the controls the caller asks for (an unbound key is never
-//! diverted, so it keeps its native firmware function), one message listener,
-//! and every diverted control handed back to the firmware on shutdown.
+//! [`crate::session::gesture::run_capture_session`], and runs the same channel
+//! lifecycle: one open channel, one message listener, and every diverted
+//! control handed back to the firmware on shutdown. What is its own is the
+//! arming — diversion on exactly the controls the caller asks for (an unbound
+//! key is never diverted, so it keeps its native firmware function) — and the
+//! edge decoding.
+//!
+//! Which controls exist is the keyboard's business: the caller names them by
+//! control ID ([`ButtonId::Control`]) and this session diverts whichever of
+//! them the device's own `0x1b04` table reports as divertable, so a key
+//! OpenLogi has no catalog row for is captured exactly like a known one.
 //!
 //! Diversion works on the key's *control* — the printed media/shortcut
 //! function — so it fires when Fn-lock is off (or via Fn+key when it is on).
@@ -16,184 +22,113 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use hidpp::{
-    device::Device,
-    feature::{
-        CreatableFeature, EmittingFeature,
-        wireless_device_status::{WirelessDeviceStatusEvent, WirelessDeviceStatusFeature},
-    },
-    protocol::v20,
-};
+use hidpp::protocol::v20;
 use openlogi_core::binding::ButtonId;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use super::gesture::{CaptureChannel, CapturedInput, GestureError, enumerate_controls, restore};
-use crate::ChannelRegistry;
-use crate::SharedChannel;
-use crate::backend::HidBackend;
-use crate::channel::route::{DeviceRoute, open_route_channel};
+use super::capture::{
+    ArmedCapture, CaptureHost, Liveness, ReportingChangeStream, open_device, run_capture,
+    subscribe_reporting_changes,
+};
+use super::capture_restore::{ArmedReporting, ReprogRestore, divert_keyboard_key};
+use super::gesture::{
+    CaptureError, CaptureSessionFailure, CaptureSessionOutcome, CapturedInput,
+    PendingCaptureRestore, enumerate_controls,
+};
+use super::restore::rollback_start;
+use crate::channel::route::DeviceRoute;
+use crate::{ChannelRegistry, SharedChannel};
 
 use crate::reprog_controls::{self, RawControlEvent, ReprogControlsV4};
 
-/// Capture the requested keyboard controls on `route` until `shutdown`
+/// Controls that are never diverted as keyboard keys, whatever a binding says.
+///
+/// - `0x00d1`–`0x00d3`, the Easy-Switch host keys: the host-switch session
+///   owns their diversion on the same channel, and a second owner would read
+///   its diverted state back as "original" and dispatch every press twice.
+/// - `0x0050`/`0x0051`, the primary clicks of a keyboard with a built-in
+///   touchpad: swallowing them would leave the user without a pointer, the
+///   same reason the mouse hook never suppresses them.
+///
+/// The config layer still accepts these names — a file is not invalid for
+/// naming a control — so the policy lives here, next to the hardware write,
+/// and is applied again by the orchestrator so a binding that names only
+/// reserved controls publishes no session at all.
+pub const RESERVED_KEYBOARD_CONTROLS: [u16; 5] = [
+    reprog_controls::control_ids::HOST_SWITCH_CHANNEL_1.0,
+    reprog_controls::control_ids::HOST_SWITCH_CHANNEL_2.0,
+    reprog_controls::control_ids::HOST_SWITCH_CHANNEL_3.0,
+    0x0050,
+    0x0051,
+];
+
+/// Whether `cid` is one of the [`RESERVED_KEYBOARD_CONTROLS`].
+#[must_use]
+pub fn is_reserved_keyboard_control(cid: u16) -> bool {
+    RESERVED_KEYBOARD_CONTROLS.contains(&cid)
+}
+
+/// Capture the requested keyboard controls on `route` until `host.shutdown`
 /// resolves, forwarding [`CapturedInput::ButtonDown`] and
-/// [`CapturedInput::ButtonUp`] edges to `sink`.
+/// [`CapturedInput::ButtonUp`] edges to `host.sink`.
 ///
-/// `wanted` maps physical F-key positions to the [`ButtonId`] they dispatch
-/// as. The session resolves each position through the keyboard's live
-/// `0x1b04` control table, because control IDs vary between keyboard models.
-pub async fn run_keyboard_capture_session(
-    backend: &dyn HidBackend,
-    route: DeviceRoute,
-    wanted: BTreeMap<u8, ButtonId>,
-    sink: mpsc::UnboundedSender<CapturedInput>,
-    shutdown: oneshot::Receiver<()>,
-    channel_slot: CaptureChannel,
-) -> Result<(), GestureError> {
-    let chan = open_route_channel(backend, &route)
-        .await?
-        .ok_or(GestureError::DeviceNotFound)?;
-    let shared = SharedChannel::new(chan, route.clone());
-    run_keyboard_capture_session_on(route, shared, wanted, sink, shutdown, channel_slot).await
-}
-
-/// Run keyboard capture on the exact channel currently published by `registry`.
+/// `wanted` maps `0x1b04` control IDs to the [`ButtonId`] they dispatch as —
+/// the caller passes only the keys that carry a real binding. Controls the
+/// device doesn't expose (or can't divert) are skipped with a debug log, so a
+/// partially-supported keyboard degrades per key rather than failing whole.
 ///
-/// A registry miss returns [`GestureError::DeviceNotFound`] without falling
-/// back to route enumeration/opening; the agent watcher retries after a later
+/// Runs on the exact channel currently published by `host.registry`. A
+/// registry miss returns [`CaptureError::DeviceNotFound`] without falling back
+/// to route enumeration/opening; the agent watcher retries after a later
 /// inventory publication.
-pub async fn run_keyboard_capture_session_with_registry(
+pub async fn run_keyboard_capture_session(
     route: DeviceRoute,
-    wanted: BTreeMap<u8, ButtonId>,
-    sink: mpsc::UnboundedSender<CapturedInput>,
-    shutdown: oneshot::Receiver<()>,
-    channel_slot: CaptureChannel,
-    registry: &ChannelRegistry,
-) -> Result<(), GestureError> {
-    let shared = registry
-        .lookup(&route)
-        .ok_or(GestureError::DeviceNotFound)?;
-    run_keyboard_capture_session_on(route, shared, wanted, sink, shutdown, channel_slot).await
+    wanted: BTreeMap<u16, ButtonId>,
+    host: CaptureHost<'_>,
+) -> Result<CaptureSessionOutcome, CaptureSessionFailure> {
+    let shared = host.channel_for(&route)?;
+    let armed = arm_keyboard(&shared, &wanted, host.registry).await?;
+    Ok(run_capture(shared, armed, host).await)
 }
 
-async fn run_keyboard_capture_session_on(
-    route: DeviceRoute,
-    shared: SharedChannel,
-    wanted: BTreeMap<u8, ButtonId>,
-    sink: mpsc::UnboundedSender<CapturedInput>,
-    shutdown: oneshot::Receiver<()>,
-    channel_slot: CaptureChannel,
-) -> Result<(), GestureError> {
-    let chan = Arc::clone(shared.channel());
-    let device_index = route.device_index();
-    let device = Device::new(Arc::clone(&chan), device_index)
-        .await
-        .map_err(|_| GestureError::DeviceUnreachable(device_index))?;
-
+/// Divert the wanted controls of the keyboard behind `shared`.
+///
+/// A failure mid-way tries to hand every possibly-diverted control back to the
+/// firmware. If compensation is incomplete, the returned failure carries an
+/// opaque restore capability for the manager to retain and retry.
+async fn arm_keyboard(
+    shared: &SharedChannel,
+    wanted: &BTreeMap<u16, ButtonId>,
+    registry: &ChannelRegistry,
+) -> Result<ArmedKeys, CaptureSessionFailure> {
+    let device = open_device(shared).await?;
     let info = device
         .root()
         .get_feature(reprog_controls::FEATURE_ID)
         .await
-        .map_err(|e| GestureError::Hidpp(format!("{e:?}")))?
-        .ok_or_else(|| GestureError::Hidpp("keyboard exposes no 0x1b04 reprog controls".into()))?;
-    let rc = ReprogControlsV4::new(Arc::clone(&chan), device_index, info.index);
-    let controls = enumerate_controls(&rc).await?;
-
-    let diverted = arm_keys(&rc, &controls, &wanted).await?;
-
-    // Physical press state per CID. Behind a `Mutex` because the channel's
-    // read thread invokes the listener by shared reference.
-    let held: Arc<Mutex<BTreeSet<u16>>> = Arc::new(Mutex::new(BTreeSet::new()));
-    let feature_index = info.index;
-    let listener = chan.add_msg_listener_guarded({
-        let held = Arc::clone(&held);
-        let diverted = diverted.clone();
-        let sink = sink.clone();
-        move |raw, matched| {
-            if matched {
-                return;
-            }
-            let msg = v20::Message::from(raw);
-            let Some(RawControlEvent::DivertedButtons(cids)) =
-                reprog_controls::decode_event(&msg, device_index, feature_index)
-            else {
-                return;
-            };
-            // Recover the guard even if a prior holder panicked — the critical
-            // section is panic-free, so the data is consistent.
-            let mut down = held.lock().unwrap_or_else(PoisonError::into_inner);
-            emit_button_edges(&mut down, &cids, &diverted, &sink);
-        }
-    });
-
-    // Wireless keyboards drop their diverted-control state when they
-    // power-cycle (idle sleep, power switch, Easy-Switch host change) — the
-    // reconnection broadcast on `0x1d4b` is the firmware asking the host to
-    // reconfigure. Re-arm the diversion on every broadcast, or the bound keys
-    // silently revert to their native functions after the first nap.
-    let wireless = device
-        .root()
-        .get_feature(WirelessDeviceStatusFeature::ID)
-        .await
-        .ok()
-        .flatten()
-        .map(|info| WirelessDeviceStatusFeature::new(Arc::clone(&chan), device_index, info.index));
-    let wake_events = wireless.as_ref().map(EmittingFeature::listen);
-
-    // Publish this keyboard's open channel so hardware writes (Fn-lock)
-    // reuse it instead of opening the same HID node a second time. Cleared
-    // on the way out.
-    if let Ok(mut slot) = channel_slot.write() {
-        *slot = Some(shared);
-    }
-
-    info!(
-        index = device_index,
-        keys = diverted.len(),
-        wake_rearm = wake_events.is_some(),
-        "keyboard key capture active"
+        .map_err(CaptureError::from)?
+        .ok_or_else(|| CaptureError::Hidpp("keyboard exposes no 0x1b04 reprog controls".into()))?;
+    let rc = ReprogControlsV4::new(
+        Arc::clone(shared.channel()),
+        shared.device_index(),
+        info.index,
     );
-    let mut shutdown = shutdown;
-    match wake_events {
-        None => {
-            let _ = shutdown.await;
-        }
-        Some(wake_events) => loop {
-            tokio::select! {
-                _ = &mut shutdown => break,
-                event = wake_events.recv() => {
-                    let Ok(WirelessDeviceStatusEvent::StatusBroadcast(broadcast)) = event else {
-                        // Emitter gone (feature dropped) — nothing left to
-                        // watch; fall back to a plain shutdown wait.
-                        let _ = shutdown.await;
-                        break;
-                    };
-                    info!(?broadcast, "keyboard reconnected — re-arming key diversion");
-                    rearm_keys(&rc, &diverted).await;
-                }
-            }
-        },
+    let controls = enumerate_controls(&rc).await?;
+    // Subscribed before the first diversion write (see
+    // `subscribe_reporting_changes`).
+    let reporting_changes = Some(subscribe_reporting_changes(&rc));
+    let mut armed = ArmedKeys {
+        controls: rc,
+        reporting: Vec::new(),
+        diverted: BTreeMap::new(),
+        reporting_changes,
+    };
+    if let Err(error) = arm_keys(&controls, wanted, &mut armed).await {
+        let pending = armed.into_pending(shared);
+        return Err(rollback_start(error, pending, registry).await);
     }
-
-    drop(listener);
-    // The slot is a last-writer-wins cell, so a sibling session may have
-    // published its own channel after ours. Clear it only while it still
-    // holds *this* session's channel — evicting the sibling's would silently
-    // demote its hardware writes to the fresh-open slow path (the gesture
-    // session applies the same discipline).
-    if let Ok(mut slot) = channel_slot.write()
-        && slot
-            .as_ref()
-            .is_some_and(|shared| Arc::ptr_eq(shared.channel(), &chan))
-    {
-        *slot = None;
-    }
-    for &cid in diverted.keys() {
-        restore(rc.undivert_cid(cid).await, "keyboard key");
-    }
-    debug!(index = device_index, "keyboard key capture stopped");
-    Ok(())
+    Ok(armed)
 }
 
 /// Diff one full diverted-control snapshot into exactly one edge per physical
@@ -220,158 +155,160 @@ fn emit_button_edges(
     }
 }
 
-/// Divert every wanted F-key position the keyboard exposes as divertable,
-/// returning the armed `CID → ButtonId` subset. Missing or non-divertable
-/// controls are skipped so a partially-supported keyboard degrades per key.
-async fn arm_keys(
-    rc: &ReprogControlsV4,
-    controls: &[reprog_controls::CtrlIdInfo],
-    wanted: &BTreeMap<u8, ButtonId>,
-) -> Result<BTreeMap<u16, ButtonId>, GestureError> {
-    let mut diverted = BTreeMap::new();
-    for (&position, &button) in wanted {
-        if let Some(cid) = divertable_cid_at_position(controls, position) {
-            rc.divert_cid(cid)
+struct ArmedKeys {
+    controls: ReprogControlsV4,
+    reporting: Vec<ArmedReporting>,
+    diverted: BTreeMap<u16, ButtonId>,
+    /// Other clients' reporting changes on `controls`, until the running
+    /// session takes them.
+    reporting_changes: Option<ReportingChangeStream>,
+}
+
+impl ArmedCapture for ArmedKeys {
+    const NAME: &'static str = "keyboard key";
+    const LIVENESS: Liveness = Liveness::Unwatched;
+
+    fn log_active(&self, device_index: u8, wake_rearm: bool) {
+        info!(
+            index = device_index,
+            keys = self.diverted.len(),
+            wake_rearm,
+            "keyboard key capture active"
+        );
+    }
+
+    fn report_handler(
+        &self,
+        device_index: u8,
+        sink: mpsc::UnboundedSender<CapturedInput>,
+    ) -> impl Fn(&v20::Message) + Send + Sync + 'static {
+        // Physical press state per CID. Behind a `Mutex` because the channel's
+        // read thread invokes the handler by shared reference.
+        let held: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+        let feature_index = self.controls.feature_index();
+        let diverted = self.diverted.clone();
+        move |msg| {
+            let Some(RawControlEvent::DivertedButtons(cids)) =
+                reprog_controls::decode_event(msg, device_index, feature_index)
+            else {
+                return;
+            };
+            // Recover the guard even if a prior holder panicked — the critical
+            // section is panic-free, so the data is consistent.
+            let mut down = held.lock().unwrap_or_else(PoisonError::into_inner);
+            emit_button_edges(&mut down, &cids, &diverted, &sink);
+        }
+    }
+
+    async fn rearm(&self) {
+        for &reporting in &self.reporting {
+            if let Err(e) = self
+                .controls
+                .set_cid_reporting_full(reporting.cid, divert_keyboard_key(reporting.original))
                 .await
-                .map_err(|e| GestureError::Hidpp(format!("{e:?}")))?;
-            diverted.insert(cid, button);
+            {
+                warn!(
+                    cid = format_args!("{:#06x}", reporting.cid),
+                    error = ?e,
+                    "re-divert after wake failed — key stays native until next wake"
+                );
+            }
+        }
+    }
+
+    fn armed_reporting(&self) -> Option<(&ReprogControlsV4, &[ArmedReporting])> {
+        (!self.reporting.is_empty()).then_some((&self.controls, self.reporting.as_slice()))
+    }
+
+    fn take_reporting_changes(&mut self) -> Option<ReportingChangeStream> {
+        let changes = self.reporting_changes.take()?;
+        (!self.reporting.is_empty()).then_some(changes)
+    }
+
+    fn into_pending(self, retired: &SharedChannel) -> Option<PendingCaptureRestore> {
+        let feature_index = self.controls.feature_index();
+        PendingCaptureRestore::new(
+            retired,
+            ReprogRestore::new(feature_index, self.reporting),
+            None,
+            None,
+        )
+    }
+}
+
+/// Divert every wanted control the keyboard exposes, adding successful CIDs to
+/// dispatch state and every possibly-applied write to rollback state. Missing
+/// or non-divertable controls are skipped so support degrades per key.
+async fn arm_keys(
+    controls: &[reprog_controls::CtrlIdInfo],
+    wanted: &BTreeMap<u16, ButtonId>,
+    armed: &mut ArmedKeys,
+) -> Result<(), CaptureError> {
+    for (&cid, &button) in wanted {
+        if is_reserved_keyboard_control(cid) {
+            warn!(
+                cid = format_args!("{cid:#06x}"),
+                "reserved control requested as a keyboard key — left native"
+            );
+            continue;
+        }
+        if controls.iter().any(|c| c.cid == cid && c.is_divertable()) {
+            let original = armed.controls.get_cid_reporting(cid).await?;
+            // A transport failure does not prove the firmware rejected the
+            // command, so include this CID in rollback before writing.
+            armed
+                .reporting
+                .push(ArmedReporting::keyboard(cid, original));
+            armed
+                .controls
+                .set_cid_reporting_full(cid, divert_keyboard_key(original))
+                .await?;
+            armed.diverted.insert(cid, button);
         } else {
             debug!(
-                position,
+                cid = format_args!("{cid:#06x}"),
                 "bound key not divertable on this keyboard — left native"
             );
         }
     }
-    Ok(diverted)
-}
-
-/// The F-row position the agent assigns a keyboard's Insert key — the slot
-/// `openlogi-agent-core`'s `function_key_position` maps the macOS `ins`
-/// keycode onto, shared with F13 because no board carries both.
-///
-/// A board that really has an F13 reports a control at this position and
-/// resolves through the ordinary lookup below. MX Keys Mini has no F13: its
-/// Insert key sits outside the function row, so the firmware reports it at
-/// position 0 and it can only be found by control identity.
-const INSERT_POSITION: u8 = 13;
-
-/// Control IDs the Insert slot is known to be exposed under, most likely
-/// first. On MX Keys Mini the key printed `Insert` *is* the volume-up key —
-/// its firmware function is Volume Up, so that is the control `0x1b04`
-/// diverts. Full-size boards that expose a genuine Insert control are matched
-/// by the other two.
-const INSERT_CIDS: [u16; 3] = [
-    reprog_controls::control_ids::RE_PROGRAMMABLE_VOLUME_UP.0,
-    reprog_controls::control_ids::MULTIPLATFORM_INSERT.0,
-    reprog_controls::control_ids::INSERT.0,
-];
-
-fn divertable_cid_at_position(
-    controls: &[reprog_controls::CtrlIdInfo],
-    position: u8,
-) -> Option<u16> {
-    let divertable = |cid: u16| {
-        controls
-            .iter()
-            .any(|control| control.cid == cid && control.is_divertable())
-    };
-
-    if let Some(control) = controls
-        .iter()
-        .find(|control| control.position == position && control.is_divertable())
-    {
-        return Some(control.cid);
-    }
-    if position != INSERT_POSITION {
-        return None;
-    }
-    INSERT_CIDS.into_iter().find(|&cid| divertable(cid))
-}
-
-/// Re-issue diversion for every armed control after a device power-cycle.
-/// Failures are logged, not propagated — the next reconnection broadcast
-/// retries.
-async fn rearm_keys(rc: &ReprogControlsV4, diverted: &BTreeMap<u16, ButtonId>) {
-    // A settling pause: the broadcast arrives the instant the link is back,
-    // occasionally before the device accepts feature writes again.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    for &cid in diverted.keys() {
-        if let Err(e) = rc.divert_cid(cid).await {
-            warn!(
-                cid = format_args!("{cid:#06x}"),
-                error = ?e,
-                "re-divert after wake failed — key stays native until next wake"
-            );
-        }
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::RwLock;
-    use std::time::Duration;
-
     use super::*;
-    use crate::channel::scripted::{ScriptedRawHidChannel, scripted_channel};
+    use openlogi_core::binding::KNOWN_CONTROLS;
 
-    /// The `0x1b04` control table an MX Keys Mini (`046d:b369`) really reports,
-    /// captured from the hardware with `openlogi diag controls`. Rows are
-    /// `(cid, task_id, flags, position)` in the order the firmware returns
-    /// them.
-    ///
-    /// Two facts about this board drive the whole Insert path, and neither is
-    /// guessable from a synthetic table:
-    ///
-    /// - Easy-Switch (F1-F3) is **not** divertable, so those keys can never
-    ///   carry a binding.
-    /// - The key printed `Insert` is the Volume Up control, and it sits
-    ///   *outside* the function row — position `0`, not `13`. Resolving it by
-    ///   position alone finds nothing, which is exactly why a bound Insert
-    ///   used to do nothing at all.
-    const MX_KEYS_MINI_CONTROLS: [(u16, u16, u16, u8); 16] = [
-        (0x00d1, 0x00ae, 0x040a, 1),  // Host Switch channel 1
-        (0x00d2, 0x00af, 0x040a, 2),  // Host Switch channel 2
-        (0x00d3, 0x00b0, 0x040a, 3),  // Host Switch channel 3
-        (0x00e2, 0x00c1, 0x043a, 4),  // Backlight -
-        (0x00e3, 0x00c2, 0x043a, 5),  // Backlight +
-        (0x0103, 0x00d8, 0x043a, 6),  // Voice Dictation
-        (0x0108, 0x00dd, 0x043a, 7),  // Open emoji panel
-        (0x010a, 0x00df, 0x043a, 8),  // Snipping tool
-        (0x011c, 0x00f1, 0x043a, 9),  // Mute microphone
-        (0x00e5, 0x0004, 0x043a, 10), // Play/Pause
-        (0x00e7, 0x0003, 0x043a, 11), // Mute
-        (0x00e8, 0x0002, 0x043a, 12), // Volume Down
-        (0x00e9, 0x0001, 0x0434, 0),  // Volume Up — the key printed `Insert`
-        (0x0117, 0x00ec, 0x0434, 0),  // Delete
-        (0x00de, 0x0062, 0x0400, 0),  // F Lock
-        (0x0034, 0x0062, 0x0000, 0),  // reports no capabilities at all
-    ];
-
-    /// Feature index the scripted keyboard answers `0x1b04` on.
-    const REPROG_INDEX: u8 = 0x09;
-    /// `Re-programmable Volume Up` — the control an MX Keys Mini `Insert`
-    /// press actually reports.
-    const VOLUME_UP_CID: u16 = 0x00e9;
-
-    fn mx_keys_mini_controls() -> Vec<reprog_controls::CtrlIdInfo> {
-        MX_KEYS_MINI_CONTROLS
+    /// The keyboard catalog names keys; the mouse capture path owns the
+    /// standard-button, gesture-source and DPI-shift control families. One
+    /// control must not be both, or a device would carry two `ButtonId`s for
+    /// one key — so the catalog never claims a family member or a reserved
+    /// control (they remain bindable as `control:0x…`).
+    #[test]
+    fn keyboard_catalog_never_claims_a_mouse_owned_or_reserved_control() {
+        let mouse_owned: Vec<u16> = reprog_controls::BACK_CIDS
             .into_iter()
-            .map(
-                |(cid, task_id, flags, position)| reprog_controls::CtrlIdInfo {
-                    cid,
-                    task_id,
-                    flags,
-                    position,
-                },
-            )
-            .collect()
+            .chain(reprog_controls::FORWARD_CIDS)
+            .chain(reprog_controls::DPI_MODE_SHIFT_CIDS)
+            .chain([
+                reprog_controls::GESTURE_BUTTON_CID,
+                reprog_controls::HAPTIC_PANEL_CID,
+            ])
+            .chain(RESERVED_KEYBOARD_CONTROLS)
+            .collect();
+        let claimed: Vec<_> = KNOWN_CONTROLS
+            .iter()
+            .filter(|control| mouse_owned.contains(&control.id.raw()))
+            .map(|control| control.name)
+            .collect();
+        assert!(claimed.is_empty(), "{claimed:?}");
     }
 
     #[test]
     fn keyboard_snapshots_emit_balanced_edges_without_duplicates() {
         let diverted = BTreeMap::from([
-            (0x00d4, ButtonId::KeySearch),
-            (0x0103, ButtonId::KeyDictation),
+            (0x00d4, ButtonId::control(0x00d4)),
+            (0x0103, ButtonId::control(0x0103)),
         ]);
         let (sink, mut inputs) = mpsc::unbounded_channel();
         let mut down = BTreeSet::new();
@@ -385,263 +322,11 @@ mod tests {
         assert_eq!(
             std::iter::from_fn(|| inputs.try_recv().ok()).collect::<Vec<_>>(),
             vec![
-                CapturedInput::ButtonDown(ButtonId::KeySearch),
-                CapturedInput::ButtonDown(ButtonId::KeyDictation),
-                CapturedInput::ButtonUp(ButtonId::KeySearch),
-                CapturedInput::ButtonUp(ButtonId::KeyDictation),
+                CapturedInput::ButtonDown(ButtonId::control(0x00d4)),
+                CapturedInput::ButtonDown(ButtonId::control(0x0103)),
+                CapturedInput::ButtonUp(ButtonId::control(0x00d4)),
+                CapturedInput::ButtonUp(ButtonId::control(0x0103)),
             ]
         );
-    }
-
-    #[test]
-    fn mx_keys_mini_function_row_resolves_each_position_to_its_own_control() {
-        let controls = mx_keys_mini_controls();
-
-        for (position, expected) in [
-            (4, 0x00e2),
-            (5, 0x00e3),
-            (6, 0x0103),
-            (7, 0x0108),
-            (8, 0x010a),
-            (9, 0x011c),
-            (10, 0x00e5),
-            (11, 0x00e7),
-            (12, 0x00e8),
-        ] {
-            assert_eq!(
-                divertable_cid_at_position(&controls, position),
-                Some(expected),
-                "F{position} must divert its own control, not a neighbour's"
-            );
-        }
-    }
-
-    #[test]
-    fn mx_keys_mini_easy_switch_keys_cannot_be_bound() {
-        let controls = mx_keys_mini_controls();
-
-        for position in 1..=3 {
-            assert_eq!(
-                divertable_cid_at_position(&controls, position),
-                None,
-                "F{position} is an Easy-Switch key the firmware refuses to divert, \
-                 so the app must not offer it"
-            );
-        }
-    }
-
-    #[test]
-    fn mx_keys_mini_insert_resolves_to_volume_up_despite_reporting_position_zero() {
-        let controls = mx_keys_mini_controls();
-
-        assert!(
-            !controls
-                .iter()
-                .any(|control| control.position == INSERT_POSITION),
-            "the premise of the fallback: this board reports nothing at position 13"
-        );
-        assert_eq!(
-            divertable_cid_at_position(&controls, INSERT_POSITION),
-            Some(VOLUME_UP_CID)
-        );
-    }
-
-    #[test]
-    fn insert_never_steals_a_real_f13_control() {
-        let mut controls = mx_keys_mini_controls();
-        controls.push(reprog_controls::CtrlIdInfo {
-            cid: 0x0100,
-            task_id: 0,
-            flags: 0x043a,
-            position: INSERT_POSITION,
-        });
-
-        assert_eq!(
-            divertable_cid_at_position(&controls, INSERT_POSITION),
-            Some(0x0100),
-            "a board that really carries F13 must resolve by position"
-        );
-    }
-
-    #[test]
-    fn a_volume_up_report_becomes_an_insert_press_and_release() {
-        let diverted = BTreeMap::from([(VOLUME_UP_CID, ButtonId::KeyFunction(INSERT_POSITION))]);
-        let (sink, mut inputs) = mpsc::unbounded_channel();
-        let mut down = BTreeSet::new();
-
-        emit_button_edges(&mut down, &[VOLUME_UP_CID], &diverted, &sink);
-        emit_button_edges(&mut down, &[], &diverted, &sink);
-
-        assert_eq!(
-            std::iter::from_fn(|| inputs.try_recv().ok()).collect::<Vec<_>>(),
-            vec![
-                CapturedInput::ButtonDown(ButtonId::KeyFunction(INSERT_POSITION)),
-                CapturedInput::ButtonUp(ButtonId::KeyFunction(INSERT_POSITION)),
-            ]
-        );
-    }
-
-    /// The whole path, over a scripted MX Keys Mini serving the captured table
-    /// above: enumerate `0x1b04`, resolve the bound Insert slot, divert the
-    /// control it really lives on, and turn that control's press/release
-    /// broadcast back into the button the agent dispatches.
-    ///
-    /// The unit tests above each pin one link. This one is the test that
-    /// fails when a bound Insert silently does nothing on the desk.
-    #[tokio::test]
-    async fn a_bound_insert_is_diverted_and_captured_end_to_end() {
-        let (raw, handle) = ScriptedRawHidChannel::with_responder(mx_keys_mini);
-        let channel = scripted_channel(raw).await;
-        let route = DeviceRoute::Direct {
-            vendor_id: 0x046d,
-            product_id: 0xb369,
-        };
-        let device_index = route.device_index();
-        let (sink, mut inputs) = mpsc::unbounded_channel();
-        let (stop, shutdown) = oneshot::channel();
-        let slot: CaptureChannel = Arc::new(RwLock::new(None));
-
-        let session = tokio::spawn(run_keyboard_capture_session_on(
-            route.clone(),
-            SharedChannel::new(channel, route.clone()),
-            BTreeMap::from([(INSERT_POSITION, ButtonId::KeyFunction(INSERT_POSITION))]),
-            sink,
-            shutdown,
-            Arc::clone(&slot),
-        ));
-
-        // The session publishes its channel only after the event listener is
-        // registered, so from here on an emitted report cannot be missed.
-        await_capture_active(&slot).await;
-
-        let written = handle.written_reports();
-        assert!(
-            written
-                .iter()
-                .any(|report| is_divert_of(report, VOLUME_UP_CID)),
-            "Insert must be armed on the Volume Up control; wrote {written:02x?}"
-        );
-
-        handle.emit(diverted_buttons_event(device_index, &[VOLUME_UP_CID]));
-        handle.emit(diverted_buttons_event(device_index, &[]));
-
-        assert_eq!(
-            inputs.recv().await,
-            Some(CapturedInput::ButtonDown(ButtonId::KeyFunction(
-                INSERT_POSITION
-            )))
-        );
-        assert_eq!(
-            inputs.recv().await,
-            Some(CapturedInput::ButtonUp(ButtonId::KeyFunction(
-                INSERT_POSITION
-            )))
-        );
-
-        let _ = stop.send(());
-        session
-            .await
-            .expect("the capture task must not panic")
-            .expect("the capture session must end cleanly");
-    }
-
-    /// Poll until the session publishes its channel, so the test cannot race
-    /// the listener registration. Bounded so a regression fails instead of
-    /// hanging the suite.
-    async fn await_capture_active(slot: &CaptureChannel) {
-        for _ in 0..200 {
-            if slot.read().is_ok_and(|slot| slot.is_some()) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("the keyboard capture session never became active");
-    }
-
-    /// Whether `report` is the `setCidReporting` write that temporarily
-    /// diverts `cid` (`diverted` valid+set, `raw_xy` valid+clear).
-    fn is_divert_of(report: &[u8], cid: u16) -> bool {
-        let [cid_hi, cid_lo] = cid.to_be_bytes();
-        report.len() >= 7
-            && report[0] == 0x11
-            && report[2] == REPROG_INDEX
-            && report[3] >> 4 == 0x03
-            && report[4] == cid_hi
-            && report[5] == cid_lo
-            && report[6] == 0b0010_0011
-    }
-
-    /// One unsolicited `divertedButtonsEvent` naming the CIDs held right now;
-    /// an empty `held` is the release snapshot.
-    fn diverted_buttons_event(device_index: u8, held: &[u16]) -> Vec<u8> {
-        let mut report = vec![0u8; 20];
-        report[0] = 0x11;
-        report[1] = device_index;
-        report[2] = REPROG_INDEX;
-        // Function 0, software id 0 — the shape that marks a device event
-        // rather than a response to a request.
-        report[3] = 0x00;
-        for (slot, cid) in held.iter().enumerate() {
-            report[4 + slot * 2..6 + slot * 2].copy_from_slice(&cid.to_be_bytes());
-        }
-        report
-    }
-
-    /// An MX Keys Mini answering `0x1b04` from the captured control table.
-    fn mx_keys_mini(request: &[u8]) -> Option<Vec<u8>> {
-        if request.len() < 7 || !matches!(request[0], 0x10 | 0x11) {
-            return None;
-        }
-        let mut payload = [0u8; 16];
-        match (request[2], request[3] >> 4) {
-            // Root ping issued by `Device::new`.
-            (0x00, 0x01) => payload[0] = 4,
-            // Root feature lookup. Only `0x1b04` is implemented, which keeps
-            // the wireless wake-up re-arm path out of this test.
-            (0x00, 0x00) => {
-                if u16::from_be_bytes([request[4], request[5]]) == reprog_controls::FEATURE_ID {
-                    payload[0] = REPROG_INDEX;
-                }
-            }
-            // getCount.
-            (REPROG_INDEX, 0x00) => {
-                payload[0] = u8::try_from(MX_KEYS_MINI_CONTROLS.len()).ok()?;
-            }
-            // getCidInfo — a long response carrying the full 16-byte row.
-            (REPROG_INDEX, 0x01) => {
-                let &(cid, task_id, flags, position) =
-                    MX_KEYS_MINI_CONTROLS.get(usize::from(request[4]))?;
-                let [flags_additional, flags_primary] = flags.to_be_bytes();
-                payload[0..2].copy_from_slice(&cid.to_be_bytes());
-                payload[2..4].copy_from_slice(&task_id.to_be_bytes());
-                payload[4] = flags_primary;
-                payload[5] = position;
-                payload[8] = flags_additional;
-                return Some(long_response(request, payload));
-            }
-            // setCidReporting — the firmware echoes the change back.
-            (REPROG_INDEX, 0x03) => {
-                payload[..3].copy_from_slice(&request[4..7]);
-                return Some(long_response(request, payload));
-            }
-            _ => return None,
-        }
-        Some(short_response(request, payload))
-    }
-
-    fn short_response(request: &[u8], payload: [u8; 16]) -> Vec<u8> {
-        let mut response = vec![0u8; 7];
-        response[0] = 0x10;
-        response[1..4].copy_from_slice(&request[1..4]);
-        response[4..].copy_from_slice(&payload[..3]);
-        response
-    }
-
-    fn long_response(request: &[u8], payload: [u8; 16]) -> Vec<u8> {
-        let mut response = vec![0u8; 20];
-        response[0] = 0x11;
-        response[1..4].copy_from_slice(&request[1..4]);
-        response[4..].copy_from_slice(&payload);
-        response
     }
 }
