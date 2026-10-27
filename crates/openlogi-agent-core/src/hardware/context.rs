@@ -5,7 +5,10 @@ use std::sync::Arc;
 use openlogi_core::device::{LightState, StandaloneDevice};
 use openlogi_core::hid::dpi::{Dpi, DpiInfo};
 use openlogi_core::hid::report_rate::{ReportRate, ReportRateInfo};
-use openlogi_core::hid::{LightCommand, PairingError, WriteError};
+use openlogi_core::hid::{
+    LightCommand, MouseSettings, MouseSettingsChange, OnboardDpiStages, OnboardDpiStagesChange,
+    PairingError, WriteError,
+};
 use openlogi_hid::backend::{HidBackend, HotplugStream};
 use openlogi_hid::compx::KnownMouse;
 use openlogi_hid::inventory::persist::ProbeCacheStore;
@@ -150,6 +153,36 @@ impl HardwareContext {
         rate: ReportRate,
     ) -> Result<ReportRateInfo, WriteError> {
         openlogi_hid::compx::set_report_rate(&*self.backend, route, rate).await
+    }
+
+    pub(crate) async fn compx_stages(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        openlogi_hid::compx::read_stages(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_stages(
+        &self,
+        route: &DeviceRoute,
+        change: &OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        openlogi_hid::compx::set_stages(&*self.backend, route, change).await
+    }
+
+    pub(crate) async fn compx_settings(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        openlogi_hid::compx::read_settings(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_settings(
+        &self,
+        route: &DeviceRoute,
+        change: &MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        openlogi_hid::compx::set_settings(&*self.backend, route, change).await
     }
 
     pub(crate) async fn run_pairing(

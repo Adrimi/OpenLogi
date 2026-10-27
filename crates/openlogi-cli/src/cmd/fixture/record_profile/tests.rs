@@ -10,7 +10,8 @@ use openlogi_core::device::DeviceInventory;
 use openlogi_core::hid::{
     BacklightChange, BacklightControls, BacklightMode, BacklightState, BacklightStatus,
     DisableKeysMask, DisableKeysState, Dpi, DpiInfo, EasySwitchHosts, EasySwitchSlot, FnLockState,
-    ForceSensingInfo, HostConnection, LightCommand, PasskeyMethod, PointerSpeed, ReceiverSelector,
+    ForceSensingInfo, HostConnection, LightCommand, MouseSettings, MouseSettingsChange,
+    OnboardDpiStages, OnboardDpiStagesChange, PasskeyMethod, PointerSpeed, ReceiverSelector,
     ReportRate, ReportRateInfo, ScrollWheelMode, SmartShiftStatus,
 };
 use openlogi_fixture::{
@@ -245,6 +246,40 @@ impl Agent for TestAgent {
 
     async fn request_accessibility_prompt(self, _: TarpcContext) {
         unreachable!("profile capture must not prompt")
+    }
+
+    async fn read_onboard_dpi_stages(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        unreachable!("profile capture never reads onboard DPI stages")
+    }
+
+    async fn set_onboard_dpi_stages(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+        _change: OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        unreachable!("profile capture must never write onboard DPI stages")
+    }
+
+    async fn read_mouse_settings(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        unreachable!("profile capture never reads mouse settings")
+    }
+
+    async fn set_mouse_settings(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+        _change: MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        unreachable!("profile capture must never write mouse settings")
     }
 
     async fn request_input_monitoring_access(self, _: TarpcContext) {

@@ -25,6 +25,10 @@ use openlogi_core::device::{
     LightState, StandaloneDevice, prettify_codename,
 };
 use openlogi_core::device_order::{DeviceIdentity, DeviceStableId, PhysicalDeviceKey};
+use openlogi_core::hid::{
+    MouseSettings, MouseSettingsChange, NO_ONBOARD_STAGES_FEATURE, OnboardDpiStages,
+    OnboardDpiStagesChange,
+};
 use openlogi_hid::{
     BacklightChange, BacklightState, CaptureChannelSlot, ChannelPool, ChannelRegistry,
     DeviceIoGate, DeviceRoute, DisableKeysMask, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
@@ -271,6 +275,65 @@ impl SharedHandles {
             Some(self.hardware.compx_dpi_info(route).await)
         } else {
             None
+        }
+    }
+
+    /// The DPI stages stored on the mouse at `route`. Only a Compx mouse
+    /// stores them; any other route answers
+    /// [`WriteError::FeatureUnsupported`], which the settings app treats as
+    /// permanent.
+    pub async fn read_onboard_dpi_stages(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_stages(route).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// Replace the DPI stages stored on the mouse at `route` and return what
+    /// it reads back; [`WriteError::FeatureUnsupported`] for any route but a
+    /// Compx mouse.
+    pub async fn set_onboard_dpi_stages(
+        &self,
+        route: &DeviceRoute,
+        change: &OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_set_stages(route, change).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// The sensor, timing and lighting settings stored on the mouse at
+    /// `route`. Only a Compx mouse stores them; any other route answers
+    /// [`WriteError::FeatureUnsupported`].
+    pub async fn read_mouse_settings(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_settings(route).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// Apply `change` to the settings stored on the mouse at `route` and
+    /// return what it reads back; [`WriteError::FeatureUnsupported`] for any
+    /// route but a Compx mouse.
+    pub async fn set_mouse_settings(
+        &self,
+        route: &DeviceRoute,
+        change: &MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_set_settings(route, change).await
+        } else {
+            Err(no_onboard_stages())
         }
     }
 
@@ -2157,6 +2220,12 @@ fn publish_arc_if_changed<T: PartialEq>(publication: &watch::Sender<Arc<T>>, val
         *current = Arc::new(value);
         true
     });
+}
+
+fn no_onboard_stages() -> WriteError {
+    WriteError::FeatureUnsupported {
+        feature_hex: NO_ONBOARD_STAGES_FEATURE,
+    }
 }
 
 fn publish_optional_arc_if_changed<T: PartialEq>(
