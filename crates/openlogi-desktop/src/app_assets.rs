@@ -24,7 +24,7 @@ pub const MOUSE_ART: &str = "device-art/wireless-mouse.svg";
 
 const MOUSE_ART_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/assets/device-art/wireless-mouse.svg"
+    "/art/wireless-mouse.svg"
 ));
 
 /// GPUI asset source: the app logo, the shared ring glyphs, then

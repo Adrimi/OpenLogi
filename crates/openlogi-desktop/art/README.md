@@ -1,9 +1,11 @@
-# Desktop-only assets
+# Desktop-only artwork
 
 Files here are embedded by `src/app_assets.rs` and served only to the settings
-app; the overlay never links them (shared artwork lives in `openlogi-ui`).
+app; the overlay never links them (shared artwork lives in `openlogi-ui`). They
+live outside `assets/`, which `cargo xtask macos bundle` empties on every build
+to stage downloaded device renders.
 
-## `device-art/wireless-mouse.svg`
+## `wireless-mouse.svg`
 
 Original artwork drawn by hand for this project (a generic top-down wireless
 mouse outline). It is not traced from, derived from, or based on any photo,
