@@ -650,19 +650,47 @@ fn device_image(
         return img(path).max_w_full().max_h_full().into_any_element();
     }
     // Cameras carry no depot asset, so give them a recognisable glyph on their
-    // gallery card instead of the generic chip fallback.
-    let icon = if matches!(record.kind, DeviceKind::Camera) {
-        IconName::Eye
-    } else {
-        IconName::Cpu
+    // gallery card instead of the generic chip fallback; mice get an original
+    // illustration.
+    let art = match placeholder_art(record.kind) {
+        PlaceholderArt::MouseIllustration => svg()
+            .path(crate::app_assets::MOUSE_ART)
+            .size_10()
+            .flex_none()
+            .text_color(pal.text_muted)
+            .into_any_element(),
+        PlaceholderArt::Camera => Icon::new(IconName::Eye)
+            .size_8()
+            .text_color(pal.text_muted)
+            .into_any_element(),
+        PlaceholderArt::Chip => Icon::new(IconName::Cpu)
+            .size_8()
+            .text_color(pal.text_muted)
+            .into_any_element(),
     };
     div()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .child(Icon::new(icon).size_8().text_color(pal.text_muted))
+        .child(art)
         .into_any_element()
+}
+
+/// What a gallery card shows for a device with no downloaded render.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PlaceholderArt {
+    MouseIllustration,
+    Camera,
+    Chip,
+}
+
+pub(super) fn placeholder_art(kind: DeviceKind) -> PlaceholderArt {
+    match kind {
+        DeviceKind::Mouse | DeviceKind::Trackball => PlaceholderArt::MouseIllustration,
+        DeviceKind::Camera => PlaceholderArt::Camera,
+        _ => PlaceholderArt::Chip,
+    }
 }
 
 /// Connection-type glyph for a gallery card: a dongle for receiver-paired

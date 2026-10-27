@@ -19,6 +19,14 @@ const LOGO_BYTES: &[u8] = include_bytes!(concat!(
     "/../../design/icon/openlogi.png"
 ));
 
+/// Asset path of the generic mouse illustration used when no device render exists.
+pub const MOUSE_ART: &str = "device-art/wireless-mouse.svg";
+
+const MOUSE_ART_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/device-art/wireless-mouse.svg"
+));
+
 /// GPUI asset source: the app logo, the shared ring glyphs, then
 /// gpui-component's bundled icons for everything else.
 pub struct AppAssets;
@@ -27,6 +35,9 @@ impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == LOGO {
             return Ok(Some(Cow::Borrowed(LOGO_BYTES)));
+        }
+        if path == MOUSE_ART {
+            return Ok(Some(Cow::Borrowed(MOUSE_ART_BYTES)));
         }
         if let Some(bytes) = ActionIcons.load(path)? {
             return Ok(Some(bytes));
@@ -50,6 +61,7 @@ mod tests {
 
         for path in [
             openlogi_ui::action_icons::RING_CANCEL_ICON,
+            MOUSE_ART,
             "icons/check.svg",
             "icons/chevron-down.svg",
         ] {

@@ -1,4 +1,4 @@
-use super::home::{connection_icon_path, ordered_device_indices};
+use super::home::{PlaceholderArt, connection_icon_path, ordered_device_indices, placeholder_art};
 use super::{Capabilities, DetailTab, DeviceKind, DeviceRecord};
 use crate::services::assets::ResolvedAsset;
 use crate::ui::battery::battery_charging_no_reading;
@@ -1468,4 +1468,13 @@ fn a_key_binding_edit_repaints_the_secure_input_notice(cx: &mut gpui::TestAppCon
         "clearing the last key repaints the window"
     );
     assert!(!secure_input_notice_drawn(cx));
+}
+
+#[test]
+fn mice_get_the_mouse_illustration_and_other_kinds_keep_their_glyph() {
+    for kind in [DeviceKind::Mouse, DeviceKind::Trackball] {
+        assert_eq!(placeholder_art(kind), PlaceholderArt::MouseIllustration);
+    }
+    assert_eq!(placeholder_art(DeviceKind::Keyboard), PlaceholderArt::Chip);
+    assert_eq!(placeholder_art(DeviceKind::Camera), PlaceholderArt::Camera);
 }
