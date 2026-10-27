@@ -33,6 +33,9 @@ pub(super) struct PointerState {
     /// save it.
     pub(super) pending_force_sensing_writes: HashMap<DeviceKey, u64>,
     pub(super) next_force_sensing_write: u64,
+    /// DPI presets of devices with a transient identity, which have no config
+    /// entry to hold them. They last until the app quits.
+    pub(super) session_dpi_presets: HashMap<DeviceKey, Vec<Dpi>>,
 }
 
 impl Default for PointerState {
@@ -48,6 +51,7 @@ impl Default for PointerState {
             refused_force_sensing: HashSet::new(),
             pending_force_sensing_writes: HashMap::new(),
             next_force_sensing_write: 0,
+            session_dpi_presets: HashMap::new(),
         }
     }
 }

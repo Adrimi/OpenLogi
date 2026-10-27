@@ -322,37 +322,31 @@ fn pointer_tab(
             Some(smartshift_card_visible(&state.smartshift_load_for(&key)))
         })
         .unwrap_or(true);
+    let smartshift_card = show_smartshift.then(|| {
+        PanelCard::new(
+            tr!("pointer.smartshift"),
+            Icon::empty().path("action-icons/refresh-cw.svg"),
+            smartshift_panel.clone().into_any_element(),
+        )
+    });
     tab_body(
         ContentWidth::Large,
         h_flex()
             .w_full()
-            .items_stretch()
+            .items_start()
             .gap_4()
             .flex_wrap()
-            .child(pointer_grid_card(
-                PanelCard::new(
-                    tr!("device.pointer_tuning"),
-                    Icon::empty().path("action-icons/gauge.svg"),
-                    dpi_panel.clone().into_any_element(),
-                )
-                .fill(),
-            ))
-            .children(show_smartshift.then(|| {
-                pointer_grid_card(
-                    PanelCard::new(
-                        tr!("pointer.smartshift"),
-                        Icon::empty().path("action-icons/refresh-cw.svg"),
-                        smartshift_panel.clone().into_any_element(),
-                    )
-                    .fill(),
-                )
-            }))
-            .child(
-                div()
-                    .min_w(POINTER_CARD_MIN_W)
-                    .flex_1()
+            .child(pointer_column(v_flex().gap_4().child(PanelCard::new(
+                tr!("device.pointer_tuning"),
+                Icon::empty().path("action-icons/gauge.svg"),
+                dpi_panel.clone().into_any_element(),
+            ))))
+            .child(pointer_column(
+                v_flex()
+                    .gap_4()
+                    .children(smartshift_card)
                     .child(scrolling_card(pal, cx)),
-            ),
+            )),
     )
 }
 
@@ -384,16 +378,15 @@ impl ScrollingRows {
     }
 }
 
-fn pointer_grid_card(card: impl IntoElement) -> impl IntoElement {
-    // At 100%, two cards plus one 16 px gap fit exactly inside the 720 px
+/// One column of the Pointer tab. Cards inside keep their own height — a
+/// short card is never stretched into a tall empty box — and stack when
+/// the column holds more than one.
+fn pointer_column(cards: impl IntoElement) -> impl IntoElement {
+    // At 100%, two columns plus one 16 px gap fit exactly inside the 720 px
     // window minimum after this tab's 20 px side insets, while still leaving a
     // usable slider: 332·2 + 16 + 20·2 = 720. In rems, the whole relationship
     // scales together.
-    div()
-        .min_w(POINTER_CARD_MIN_W)
-        .flex_1()
-        .h_full()
-        .child(card)
+    div().min_w(POINTER_CARD_MIN_W).flex_1().child(cards)
 }
 
 /// What the scrolling card shows for the selected device — `Default` is the
@@ -465,34 +458,19 @@ fn scrolling_card(pal: Palette, cx: &mut Context<AppView>) -> impl IntoElement {
     });
     let smooth_wheel = AppState::try_read(cx).is_some_and(AppState::current_smooth_wheel);
     let inversion_description = inversion_description(inversion_supported, inversion_is_software);
-    let inversion_row = h_flex()
-        .justify_between()
-        .items_center()
-        .gap_4()
-        .child(
-            v_flex()
-                .child(
-                    div()
-                        .text_body()
-                        .text_color(pal.text_primary)
-                        .child(tr!("pointer.invert_scroll_direction")),
-                )
-                .child(
-                    div()
-                        .text_caption()
-                        .text_color(pal.text_muted)
-                        .child(inversion_description),
-                ),
-        )
-        .child(
-            Toggle::new("invert-scroll-toggle")
-                .selected(inverted)
-                .disabled(!inversion_supported)
-                .label((!inversion_supported).then(|| tr!("common.unavailable")))
-                .on_change(|inverted, _window, cx| {
-                    AppState::apply(cx, |state| state.commit_invert_scroll(*inverted));
-                }),
-        );
+    let inversion_row = toggle_row(
+        "invert-scroll-row",
+        pal,
+        tr!("pointer.invert_scroll_direction"),
+        inversion_description,
+        Toggle::new("invert-scroll-toggle")
+            .selected(inverted)
+            .disabled(!inversion_supported)
+            .label((!inversion_supported).then(|| tr!("common.unavailable")))
+            .on_change(|inverted, _window, cx| {
+                AppState::apply(cx, |state| state.commit_invert_scroll(*inverted));
+            }),
+    );
     let resolution_description = match hires {
         HiresWheel::Here => match resolution {
             None => tr!("pointer.wheel_resolution_device_default_description"),
@@ -508,8 +486,11 @@ fn scrolling_card(pal: Palette, cx: &mut Context<AppView>) -> impl IntoElement {
     };
     let resolution_row = v_flex()
         .gap_2()
+        .w_full()
+        .min_w_0()
         .child(
             v_flex()
+                .min_w_0()
                 .child(
                     div()
                         .text_body()

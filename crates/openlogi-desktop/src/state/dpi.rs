@@ -49,12 +49,13 @@ impl AppState {
     /// editor in that state).
     pub fn commit_dpi_presets(&mut self, presets: Vec<Dpi>) -> StateEvents {
         let events = self.for_current_device(StateEvent::DpiChanged);
-        let Some(key) = self
-            .current_record()
-            .and_then(DeviceRecord::persistent_config_key)
-            .map(str::to_string)
-        else {
-            debug!("no persistent device key — DPI presets kept in memory only");
+        let Some(record) = self.current_record() else {
+            return events;
+        };
+        let Some(key) = record.persistent_config_key().map(str::to_string) else {
+            debug!("no persistent device key — DPI presets kept for this session only");
+            let device_key = record.device_key();
+            self.pointer.session_dpi_presets.insert(device_key, presets);
             return events;
         };
         self.config
@@ -66,10 +67,18 @@ impl AppState {
     /// when no device is selected. UI helper.
     #[must_use]
     pub fn dpi_presets(&self) -> Vec<Dpi> {
-        self.current_record()
-            .and_then(DeviceRecord::persistent_config_key)
-            .map(|key| self.config.dpi_presets(key))
-            .unwrap_or_default()
+        let Some(record) = self.current_record() else {
+            return Vec::new();
+        };
+        match record.persistent_config_key() {
+            Some(key) => self.config.dpi_presets(key),
+            None => self
+                .pointer
+                .session_dpi_presets
+                .get(&record.device_key())
+                .cloned()
+                .unwrap_or_default(),
+        }
     }
     /// The active device's known DPI: the live capability read once it
     /// completes, else the persisted config value, else [`DEFAULT_DPI`] for a
@@ -277,4 +286,69 @@ pub(super) fn resolve_dpi(live: Option<&DpiLoad>, configured: Option<Dpi>) -> Dp
         _ => None,
     });
     from_live.or(configured).unwrap_or(DEFAULT_DPI)
+}
+
+#[cfg(test)]
+mod tests {
+    use openlogi_core::config::Config;
+    use openlogi_core::device::DeviceKind;
+    use openlogi_core::hid::Dpi;
+
+    use crate::services::assets::AssetResolver;
+    use crate::state::devices::DeviceRecord;
+    use crate::state::{AppState, Sources};
+
+    fn state_with_device(persistent: bool) -> AppState {
+        let resolver = AssetResolver::new();
+        let (commands, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = AppState::new(Sources::in_memory(Config::default(), &resolver, commands));
+        let record = DeviceRecord {
+            config_key: "id:test".to_string(),
+            canonical_key: None,
+            persistent,
+            route_key: "route".to_string(),
+            model_key: "id:test".to_string(),
+            model_name: "test device".to_string(),
+            display_name: "test device".to_string(),
+            asset: None,
+            model_info: None,
+            codename: None,
+            serial_number: None,
+            unit_id: [0; 4],
+            driver_id: None,
+            registry_model_id: None,
+            route: None,
+            capture_id: None,
+            kind: DeviceKind::Mouse,
+            capabilities: None,
+            light_capabilities: None,
+            slot: 1,
+            online: true,
+            battery: None,
+            settings_revision: 0,
+            stale_pairings: Vec::new(),
+        };
+        state.devices.replace(vec![record], 0);
+        state
+    }
+
+    #[test]
+    fn a_transient_device_keeps_its_presets_for_the_session() {
+        let mut state = state_with_device(false);
+        assert!(state.dpi_presets().is_empty());
+        let presets = vec![Dpi::new(800), Dpi::new(1600)];
+        let _ = state.commit_dpi_presets(presets.clone());
+        assert_eq!(state.dpi_presets(), presets);
+        let _ = state.commit_dpi_presets(vec![Dpi::new(800)]);
+        assert_eq!(state.dpi_presets(), vec![Dpi::new(800)]);
+    }
+
+    #[test]
+    fn a_persistent_device_saves_its_presets_in_the_config() {
+        let mut state = state_with_device(true);
+        let presets = vec![Dpi::new(1200)];
+        let _ = state.commit_dpi_presets(presets.clone());
+        assert_eq!(state.dpi_presets(), presets);
+        assert!(state.pointer.session_dpi_presets.is_empty());
+    }
 }

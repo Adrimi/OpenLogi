@@ -249,7 +249,6 @@ pub(crate) struct PanelCard {
     title: SharedString,
     icon: Icon,
     content: AnyElement,
-    fill: bool,
 }
 
 impl PanelCard {
@@ -262,14 +261,7 @@ impl PanelCard {
             title: title.into(),
             icon,
             content: content.into_any_element(),
-            fill: false,
         }
-    }
-
-    #[must_use]
-    pub(crate) fn fill(mut self) -> Self {
-        self.fill = true;
-        self
     }
 }
 
@@ -278,7 +270,6 @@ impl RenderOnce for PanelCard {
         let pal = theme::palette(cx);
         div()
             .w_full()
-            .when(self.fill, gpui::Styled::h_full)
             .max_w_full()
             .min_w_0()
             .rounded(pal.card_radius)
