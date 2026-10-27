@@ -14,18 +14,24 @@ use openlogi_core::hid::report_rate::{ReportRate as WireReportRate, ReportRateIn
 use openlogi_core::hid::{DeviceRoute, WriteError};
 use openlogi_device_registry::compx::find_compx;
 use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::config::{self, ConfigChangeError, Dpi, FlashImage, MouseConfig, ReportRate};
 use super::{Battery, PcDriver, REPORT_LEN, Request, Response, ResponseError};
 use crate::backend::{HidBackend, NodeInfo, RawDuplex};
 use crate::channel::route::find_raw_route_node;
 
-/// How long one attempt waits for its reply. The vendor driver waits 100 ms;
-/// a relayed reply from a mouse at the edge of range can take longer.
-const REPLY_TIMEOUT: Duration = Duration::from_millis(250);
-/// Attempts per request before the mouse counts as unresponsive.
-const ATTEMPTS: usize = 3;
+/// How long each attempt waits for its reply, one entry per attempt. The
+/// vendor driver waits 100 ms, but on hardware an idle mouse missed three
+/// 250 ms attempts and answered a request sent seconds later, so the wait
+/// grows instead of giving up within a second. Resending is safe: every
+/// request, flash writes included, is idempotent.
+const REPLY_TIMEOUTS: [Duration; 4] = [
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_millis(1000),
+    Duration::from_millis(2000),
+];
 /// Rates offered on a receiver link. Higher rates need a 4K receiver this
 /// driver cannot yet tell apart, so they are offered only when the mouse
 /// already runs at one.
@@ -62,13 +68,14 @@ impl Link {
     }
 
     async fn transact(&mut self, request: &Request) -> Result<Response, WriteError> {
-        for _ in 0..ATTEMPTS {
+        for timeout in REPLY_TIMEOUTS {
             self.duplex.write_output_report(request.as_bytes()).await?;
-            match tokio::time::timeout(REPLY_TIMEOUT, self.reply_to(request)).await {
+            match tokio::time::timeout(timeout, self.reply_to(request)).await {
                 Ok(reply) => return reply,
                 Err(_elapsed) => {}
             }
         }
+        warn!(opcode = ?request.opcode(), "Compx mouse did not answer");
         Err(WriteError::RawDeviceUnresponsive)
     }
 
