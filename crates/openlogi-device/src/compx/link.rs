@@ -338,9 +338,9 @@ impl KnownMouse {
 /// last-good.
 ///
 /// A mouse first seen gets one full session (battery, flash, serial). After
-/// that it is checked at most every [`CHECK_INTERVAL`], with a battery-only
-/// session, and a mouse that does not answer — asleep, switched off, or out
-/// of range — keeps its last-good state for [`LAST_GOOD_GRACE`].
+/// that it is checked at most every two minutes, with a battery-only session,
+/// and a mouse that does not answer — asleep, switched off, or out of range —
+/// keeps its last-good state for ten minutes.
 pub async fn refresh_standalone(
     backend: &dyn HidBackend,
     devices: &mut [StandaloneDevice],
