@@ -239,6 +239,14 @@ impl Agent for AgentServer {
         _: Context,
         route: DeviceRoute,
     ) -> Result<SmartShiftStatus, WriteError> {
+        // A Compx mouse has no SmartShift wheel. Answer as a HID++ mouse
+        // without `0x2110` does, so the settings app shows it as unsupported
+        // instead of retrying a read no channel can serve.
+        if openlogi_hid::compx::is_compx_route(&route) {
+            return Err(WriteError::FeatureUnsupported {
+                feature_hex: 0x2110,
+            });
+        }
         self.shared
             .device(&route)
             .run(HidppOperation::ReadSmartShift, |c| async move {
