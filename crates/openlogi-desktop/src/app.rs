@@ -361,6 +361,11 @@ impl AppView {
             StateEvent::LightingChanged(key) => {
                 on_home || (self.active_tab == DetailTab::Light && is_current(key))
             }
+            // The panel repaints itself; the root only decides whether the
+            // Pointer tab still lists its card.
+            StateEvent::SmartShiftChanged(key) => {
+                !on_home && self.active_tab == DetailTab::Pointer && is_current(key)
+            }
             StateEvent::DeviceConfigChanged(key) => {
                 on_home
                     || (matches!(self.active_tab, DetailTab::Pointer | DetailTab::Device)
@@ -371,8 +376,7 @@ impl AppView {
             // language switch already refreshes every window, and the root
             // caches no localized text. A refused removal is a dialog,
             // opened through `removal_obs`.
-            StateEvent::SmartShiftChanged(_)
-            | StateEvent::DisableKeysChanged(_)
+            StateEvent::DisableKeysChanged(_)
             | StateEvent::ReportRateChanged(_)
             | StateEvent::PointerSpeedChanged(_)
             | StateEvent::ForceSensingChanged(_)
