@@ -23,7 +23,7 @@ const DUMP: &str = "
     ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
     ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff";
 
-fn dump() -> Vec<u8> {
+pub(in crate::compx) fn dump() -> Vec<u8> {
     let bytes: Vec<u8> = DUMP
         .split_whitespace()
         .map(|byte| u8::from_str_radix(byte, 16).expect("hex byte"))

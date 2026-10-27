@@ -634,6 +634,13 @@ pub struct StandaloneDevice {
     /// append-only GUI↔agent bincode wire format.
     #[serde(default)]
     pub registry_model_id: Option<String>,
+    /// Last battery reading for a driver that reports one (Compx mice);
+    /// `None` when the device has no battery or did not answer.
+    ///
+    /// Appended for the same append-only wire contract as
+    /// [`Self::registry_model_id`].
+    #[serde(default)]
+    pub battery: Option<BatteryInfo>,
 }
 
 impl StandaloneDevice {

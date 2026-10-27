@@ -223,6 +223,9 @@ impl Agent for AgentServer {
     }
 
     async fn read_dpi(self, _: Context, route: DeviceRoute) -> Result<DpiInfo, WriteError> {
+        if let Some(info) = self.shared.read_raw_dpi(&route).await {
+            return info;
+        }
         self.shared
             .device(&route)
             .run(HidppOperation::ReadDpiCapabilities, |c| async move {
@@ -333,6 +336,9 @@ impl Agent for AgentServer {
         _: Context,
         route: DeviceRoute,
     ) -> Result<ReportRateInfo, WriteError> {
+        if let Some(info) = self.shared.read_raw_report_rate(&route).await {
+            return info;
+        }
         self.shared
             .device(&route)
             .run(HidppOperation::ReadReportRate, |c| async move {

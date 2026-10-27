@@ -27,7 +27,7 @@ use openlogi_core::device::{
 use openlogi_core::device_order::{DeviceIdentity, DeviceStableId, PhysicalDeviceKey};
 use openlogi_hid::{
     BacklightChange, BacklightState, CaptureChannelSlot, ChannelPool, ChannelRegistry,
-    DeviceIoGate, DeviceRoute, DisableKeysMask, Dpi, EasySwitchHosts, FnLockState,
+    DeviceIoGate, DeviceRoute, DisableKeysMask, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
     ForceSensingInfo, HidppOperation, HostOs, PointerSpeed, ReportRate, ReportRateInfo, WriteError,
     commands_for_light_settings, is_reserved_keyboard_control,
 };
@@ -264,6 +264,29 @@ impl SharedHandles {
             .await
     }
 
+    /// The DPI of the raw-HID mouse at `route`, when a raw driver owns it;
+    /// `None` for a route the HID++ layer serves.
+    pub async fn read_raw_dpi(&self, route: &DeviceRoute) -> Option<Result<DpiInfo, WriteError>> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            Some(self.hardware.compx_dpi_info(route).await)
+        } else {
+            None
+        }
+    }
+
+    /// The report rate of the raw-HID mouse at `route`, when a raw driver
+    /// owns it; `None` for a route the HID++ layer serves.
+    pub async fn read_raw_report_rate(
+        &self,
+        route: &DeviceRoute,
+    ) -> Option<Result<ReportRateInfo, WriteError>> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            Some(self.hardware.compx_report_rate_info(route).await)
+        } else {
+            None
+        }
+    }
+
     /// Write `rate` to the mouse at `route` and return what it reads back.
     /// When a newer report-rate write for the mouse is requested before this
     /// one gets its turn, this one reads the mouse instead of writing a rate
@@ -276,6 +299,9 @@ impl SharedHandles {
         route: &DeviceRoute,
         rate: ReportRate,
     ) -> Result<ReportRateInfo, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            return self.hardware.compx_set_report_rate(route, rate).await;
+        }
         let ticket = self.report_rate_order.request(route);
         self.device(route)
             .run_in_turn(
@@ -355,6 +381,11 @@ impl SharedHandles {
     /// the reconnect reapply. A write superseded before its turn writes
     /// nothing.
     pub async fn set_dpi(&self, route: &DeviceRoute, dpi: Dpi) -> Result<(), WriteError> {
+        // A Compx mouse has no HID++ channel and no precision mode; its DPI
+        // lives in its configuration flash.
+        if openlogi_hid::compx::is_compx_route(route) {
+            return self.hardware.compx_set_dpi(route, dpi).await;
+        }
         let AppWrite { ticket, restore } = self
             .pointer_speeds
             .app_write(route, SavedSpeed::Dpi(Some(dpi)));

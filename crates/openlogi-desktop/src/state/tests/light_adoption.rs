@@ -44,6 +44,7 @@ fn glow(identity: &str, serial: Option<&str>, online: bool) -> StandaloneDevice 
         light_capabilities: Some(capabilities()),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     }
 }
 

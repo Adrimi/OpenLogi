@@ -564,6 +564,36 @@ pub fn set_stages(stages: &[DpiStage], active: u8) -> Result<Vec<Request>, Confi
     Ok(requests)
 }
 
+/// Every DPI value [`Dpi::new`] accepts, ascending.
+pub fn storable_dpi() -> impl Iterator<Item = Dpi> {
+    (DPI_STEP..=MAX_LOW_BYTE_DPI)
+        .step_by(usize::from(DPI_STEP))
+        .filter_map(Dpi::new)
+}
+
+/// Flash write changing the resolution of configured stage `stage`,
+/// leaving its colour and every other stage untouched.
+///
+/// # Errors
+///
+/// [`ConfigChangeError::StageOutOfRange`] beyond the configured stages.
+pub fn set_stage_resolution(
+    config: &MouseConfig,
+    stage: u8,
+    x: Dpi,
+    y: Dpi,
+) -> Result<Request, ConfigChangeError> {
+    let count = u8::try_from(config.stages.len()).unwrap_or(u8::MAX);
+    if stage >= count {
+        return Err(ConfigChangeError::StageOutOfRange { stage, count });
+    }
+    let entry: [u8; 4] = with_check([x.step(), y.step(), 0]);
+    Ok(Request::write_flash(
+        DPI_TABLE + u16::from(stage) * ENTRY_LEN,
+        &entry,
+    )?)
+}
+
 /// Flash write binding button `index` to `action`.
 ///
 /// # Errors
@@ -591,4 +621,4 @@ fn write_single(address: u16, value: u8) -> Request {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

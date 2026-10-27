@@ -159,6 +159,7 @@ fn build_devices_keeps_serial_backed_standalone_lights_beside_hidpp_devices() {
         light_capabilities: Some(light_capabilities),
         driver_id: "litra".to_string(),
         registry_model_id: Some("8c900".to_string()),
+        battery: None,
     };
 
     let devices = build_devices(

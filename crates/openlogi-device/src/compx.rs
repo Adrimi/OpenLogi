@@ -39,9 +39,15 @@
 //! they are listed in [`Opcode`] for decoding only and have no builder.
 
 pub mod config;
+mod link;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use thiserror::Error;
+
+pub use self::link::{
+    is_compx_route, read_dpi_info, read_report_rate_info, refresh_standalone, set_dpi,
+    set_report_rate,
+};
 
 /// Report id of every Compx request and response.
 pub const REPORT_ID: u8 = 0x08;

@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use openlogi_core::device::{LightState, StandaloneDevice};
+use openlogi_core::hid::dpi::{Dpi, DpiInfo};
+use openlogi_core::hid::report_rate::{ReportRate, ReportRateInfo};
 use openlogi_core::hid::{LightCommand, PairingError, WriteError};
 use openlogi_hid::backend::{HidBackend, HotplugStream};
 use openlogi_hid::inventory::persist::ProbeCacheStore;
@@ -101,10 +103,42 @@ impl HardwareContext {
         openlogi_hid::inventory::hotplug::watch_hotplug(&*self.backend)
     }
 
+    /// Standalone devices, with the live state of any Compx mouse read in the
+    /// same pass so its battery and controls follow the inventory.
     pub(crate) async fn enumerate_standalone(
         &self,
     ) -> Result<Vec<StandaloneDevice>, InventoryError> {
-        openlogi_hid::inventory::standalone::enumerate_standalone(&*self.backend).await
+        let mut devices =
+            openlogi_hid::inventory::standalone::enumerate_standalone(&*self.backend).await?;
+        openlogi_hid::compx::refresh_standalone(&*self.backend, &mut devices).await;
+        Ok(devices)
+    }
+
+    pub(crate) async fn compx_dpi_info(&self, route: &DeviceRoute) -> Result<DpiInfo, WriteError> {
+        openlogi_hid::compx::read_dpi_info(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_dpi(
+        &self,
+        route: &DeviceRoute,
+        dpi: Dpi,
+    ) -> Result<(), WriteError> {
+        openlogi_hid::compx::set_dpi(&*self.backend, route, dpi).await
+    }
+
+    pub(crate) async fn compx_report_rate_info(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<ReportRateInfo, WriteError> {
+        openlogi_hid::compx::read_report_rate_info(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_report_rate(
+        &self,
+        route: &DeviceRoute,
+        rate: ReportRate,
+    ) -> Result<ReportRateInfo, WriteError> {
+        openlogi_hid::compx::set_report_rate(&*self.backend, route, rate).await
     }
 
     pub(crate) async fn run_pairing(

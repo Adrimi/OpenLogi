@@ -180,7 +180,11 @@ impl fmt::Display for StandaloneDisplay<'_> {
             device.address.vendor_id,
             device.address.product_id,
             device.driver_id,
-        )
+        )?;
+        if let Some(battery) = &device.battery {
+            write!(f, " {}", BatteryDisplay(battery))?;
+        }
+        Ok(())
     }
 }
 
@@ -382,6 +386,7 @@ mod format_tests {
             light_capabilities: None,
             driver_id: "logitech-g600".into(),
             registry_model_id: None,
+            battery: None,
         };
 
         assert_eq!(

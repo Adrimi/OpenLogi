@@ -50,6 +50,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: Some(litra_capabilities(descriptor.model)),
             driver_id: descriptor.driver_id.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
         });
     }
 
@@ -71,6 +72,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: None,
             driver_id: GAMING_HEADSET_DRIVER_ID.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
         });
     }
 
@@ -94,6 +96,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: None,
             driver_id: G600_DRIVER_ID.to_owned(),
             registry_model_id: None,
+            battery: None,
         });
     }
 
@@ -117,6 +120,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: None,
             driver_id: COMPX_DRIVER_ID.to_owned(),
             registry_model_id: None,
+            battery: None,
         });
     }
 
@@ -267,6 +271,7 @@ mod tests {
             light_capabilities: None,
             driver_id: "litra".into(),
             registry_model_id: None,
+            battery: None,
         }
     }
 
