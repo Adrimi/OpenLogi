@@ -159,8 +159,11 @@ Verified reply examples (checksum is the last byte, ellipsis is zero padding):
 ## Configuration flash
 
 Reading is **verified on hardware**. The layout below comes from the DLL's
-`MouseConfigParser` (**from the vendor DLL, not yet hardware-verified**);
-writes have **not** been sent to hardware.
+`MouseConfigParser`. Its polling-rate pair, stage count, active stage and the
+active stage's DPI are **verified on hardware**: OpenLogi's parser reads
+1000 Hz and 1400 DPI (stage 3 of 5) from the test mouse, matching the dump
+below. The other fields are still **from the vendor DLL, not yet
+hardware-verified**. Writes have **not** been sent to hardware yet.
 
 The image is 0xF0 bytes, read as 24 chunks of 10 bytes with opcode `0x08`.
 
@@ -347,8 +350,13 @@ Read-only procedure, in this order:
 Rules:
 
 - Never set the `0x80` length bit for a mouse.
-- Never send write, restore-defaults, profile-select, calibration, binding or
-  factory opcodes while they remain unverified.
+- Never send restore-defaults, profile-select, calibration, binding or factory
+  opcodes while they remain unverified. Flash writes are limited to the two
+  OpenLogi performs (see below): one entry at a time, read back afterwards.
+- Do not probe from a second process while the OpenLogi agent is running.
+  Replies carry no request id, only the echoed opcode, so two clients on one
+  receiver can take each other's replies; the agent serializes its own
+  sessions, but nothing serializes it against another process.
 - Close the device cleanly; the receiver stays attached to the "driver" state
   until detached.
 
@@ -363,28 +371,84 @@ Rules:
 - Charging flag (`0x04` `payload[1]`): only the value 0 has been observed.
 - Stored kind byte for multimedia buttons; the observed entry `08 04 00` is not
   mapped.
-- Write path (`0x07`): not yet sent to hardware; the pair/check encoding and
-  whether a commit or reload step is required are unconfirmed.
+- Write path (`0x07`): implemented for the active stage's DPI entry and the
+  polling rate, each read back after the write, but not yet exercised on
+  hardware. Whether the firmware needs a commit or reload step after a
+  write is unconfirmed; a read-back mismatch would surface as
+  `DpiNotApplied` / `ReportRateNotApplied`.
+- Polling rates above 1000 Hz: offered only when the mouse already reports
+  one, because a 1K receiver cannot yet be told apart from a 4K one.
 - Payloads of the 4K-receiver RGB and light-bar commands.
+
 
 ## Implementation status in OpenLogi
 
-Implemented:
+### Layers
 
-- Identity: [`crates/openlogi-device-registry/src/compx.rs`](../crates/openlogi-device-registry/src/compx.rs)
-  (VID, driver id, usage page/usage, device descriptors).
-- Sans-I/O protocol: [`crates/openlogi-device/src/compx.rs`](../crates/openlogi-device/src/compx.rs)
-  (framing, checksum, opcodes, request builders) and
-  [`crates/openlogi-device/src/compx/config.rs`](../crates/openlogi-device/src/compx/config.rs)
-  (flash image, parser, and change builders).
-- Discovery: [`crates/openlogi-device/src/inventory/standalone.rs`](../crates/openlogi-device/src/inventory/standalone.rs)
-  lists the receiver as a standalone mouse; `openlogi list` shows
-  `Zaopin Wireless Mouse (mouse, vid=3554 pid=f524, driver=compx)`
-  (**verified on hardware**).
+| Layer | File | What it does |
+|---|---|---|
+| Identity | [`openlogi-device-registry/src/compx.rs`](../crates/openlogi-device-registry/src/compx.rs) | VID, PIDs, usage page/usage, driver id `compx` |
+| Protocol (sans I/O) | [`openlogi-device/src/compx.rs`](../crates/openlogi-device/src/compx.rs) | Framing, checksum, typed opcodes, request builders, reply decoders |
+| Configuration flash (sans I/O) | [`openlogi-device/src/compx/config.rs`](../crates/openlogi-device/src/compx/config.rs) | Flash image, parser, change builders |
+| Session | [`openlogi-device/src/compx/link.rs`](../crates/openlogi-device/src/compx/link.rs) | Attach → requests → detach over a raw report pair; reply matching, timeout, retries |
+| Transport | `HidBackend::open_raw_duplex` / `RawDuplex` in [`openlogi-device/src/backend.rs`](../crates/openlogi-device/src/backend.rs), implemented by `NativeRawDuplex` in [`openlogi-hid/src/transport/native.rs`](../crates/openlogi-hid/src/transport/native.rs) | Output reports out, input reports back, on the `0xFF05` collection |
+| Discovery | [`openlogi-device/src/inventory/standalone.rs`](../crates/openlogi-device/src/inventory/standalone.rs) | Lists the receiver as a standalone mouse |
+| Agent | `HardwareContext` / `Orchestrator` in `openlogi-agent-core`, RPC handlers in `openlogi-agent/src/server.rs` | Routes a Compx `RawHid` route to the driver instead of HID++ |
 
-Not yet implemented:
+### Session behaviour
 
-- A live transport and a request/response backend method for Compx devices.
-- Battery and DPI in the GUI; both need an IPC wire change, which is versioned
-  and append-only (see `crates/openlogi-ipc/AGENTS.md`).
-- Any hardware write of the configuration flash.
+- Every operation is one session: open the collection, attach (`0x02`,
+  `0x01`), run its requests, detach (`0x02`, `0x00`) — the detach runs on
+  error paths too.
+- Sessions are serialized process-wide; replies are matched by echoed opcode
+  (and address for flash replies), and reports for other ids are skipped.
+- Each attempt waits 250 ms for its reply, three attempts per request. A mouse
+  that never answers (asleep, off, out of range) yields
+  `WriteError::RawDeviceUnresponsive`; a rejected request or a malformed reply
+  yields `WriteError::RawDeviceProtocol`.
+
+### What the app shows
+
+| Feature | How | Status |
+|---|---|---|
+| Recognition | Standalone inventory, `driver=compx` | **verified on hardware** |
+| Battery | Read on every inventory scan into `StandaloneDevice::battery` (appended to the IPC wire, protocol v42); percentage, level bucket, charging state | **verified on hardware** (20 %, 3612 mV) |
+| DPI | Existing `read_dpi` / `set_dpi` RPCs; `current` is the active stage's X resolution, the offered range is 50–12 800 in steps of 50 | read **verified on hardware**; write not yet |
+| Polling rate | Existing `read_report_rate` / `set_report_rate` RPCs; 125–1000 Hz on a receiver link | read **verified on hardware**; write not yet |
+| SmartShift | Answered as `FeatureUnsupported (0x2110)`, as for a HID++ mouse without the feature | — |
+| `openlogi list` | Prints the battery after the device line | **verified on hardware** |
+
+The DPI and polling-rate controls appear because a successful refresh sets
+the device's measured `Capabilities::pointer` and `report_rate`. A mouse that
+did not answer during the scan keeps no battery and no controls, rather than
+showing stale or presumed ones.
+
+### Writes
+
+- DPI writes replace only the active stage's entry (`[x, y, 0, check]` at
+  `0x0C + 4·stage`), keeping its colour and every other stage, then re-read
+  the flash; a mismatch is `WriteError::DpiNotApplied`. A value the flash
+  cannot store is refused before anything is sent (`DpiUnsupported`).
+- Polling-rate writes replace the `0x00` pair, then re-read; a mismatch is
+  `WriteError::ReportRateNotApplied`; a rate not offered on the link is
+  refused first (`ReportRateUnsupported`).
+- No other flash field is written.
+
+### Tests
+
+- 35 unit tests in `openlogi-device` (`cargo test -p openlogi-device --lib
+  compx`): frames and checksums against captured replies, the flash parser
+  against the hardware dump, encoder round-trips, and the session against a
+  simulated mouse (awake, asleep, ignoring writes, foreign reports
+  interleaved, wrong route).
+- Wire goldens for the appended field and the two new errors in
+  `openlogi-ipc/tests/wire_format.rs`.
+
+### Not yet implemented
+
+- Button remapping, DPI stage list and colours, debounce, lighting and the
+  unidentified flash fields — the encoders exist in `config.rs`, but no UI or
+  RPC drives them.
+- Pairing, long-range mode, receiver LEDs, RSSI and firmware versions in the
+  UI (request builders and decoders exist).
+- Distinguishing a 4K receiver, to offer 2000–8000 Hz.
