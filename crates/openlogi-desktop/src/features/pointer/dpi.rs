@@ -162,11 +162,16 @@ impl Render for DpiPanel {
             self.pointer_speed = None;
             self.dpi_section(window, cx)
         };
+        let unresponsive = AppState::try_read(cx).is_some_and(AppState::current_mouse_unresponsive);
         v_flex()
             .gap_3()
             .w_full()
             .child(main)
             .children(report_rate_section(ReportRateFacts::current(cx), pal))
+            .children(
+                unresponsive
+                    .then(|| status_line(tr!("pointer.mouse_not_responding_try_again"), pal)),
+            )
     }
 }
 

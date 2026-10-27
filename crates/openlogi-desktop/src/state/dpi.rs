@@ -135,6 +135,7 @@ impl AppState {
             debug!(key = %key, "device unreachable — DPI change kept in memory only");
             return events;
         };
+        self.pointer.unresponsive_mice.remove(&key);
         let write = self.pointer.next_dpi_write;
         self.pointer.next_dpi_write = write.saturating_add(1);
         self.pointer.pending_dpi_writes.insert(key.clone(), write);
@@ -154,7 +155,9 @@ impl AppState {
     /// saved value again on reconnect. A failure saves nothing.
     /// [`WriteError::DpiNotApplied`] shows the DPI the device reports instead.
     /// [`WriteError::DpiUnsupported`] wrote nothing, so the device's last
-    /// known DPI is shown again. Any other failure also shows that value and
+    /// known DPI is shown again. [`WriteError::RawDeviceUnresponsive`], a
+    /// mouse that did not answer, also flags it for [`Self::current_mouse_unresponsive`].
+    /// Any other failure also shows that value and
     /// reads the device again, because the write may or may not have reached
     /// it.
     ///
@@ -179,6 +182,7 @@ impl AppState {
         // `None` shows the DPI the device is known to run at.
         let reported = match result {
             Ok(()) => {
+                self.pointer.unresponsive_mice.remove(key);
                 self.pointer.reads.set_dpi_current(key, dpi);
                 self.persist_dpi(key, dpi);
                 Some(dpi)
@@ -193,6 +197,9 @@ impl AppState {
                 None
             }
             Err(error) => {
+                if matches!(error, WriteError::RawDeviceUnresponsive) {
+                    self.pointer.unresponsive_mice.insert(key.clone());
+                }
                 warn!(%error, key = %key, requested = %dpi, "DPI write did not land — not saving it, re-reading the device");
                 self.pointer.reads.refresh_dpi(key);
                 None
@@ -222,6 +229,17 @@ impl AppState {
         self.config
             .edit(|config| config.set_dpi(&persistent_key, dpi));
         self.persist_and_reload("DPI");
+    }
+
+    /// Whether the active mouse did not answer its last DPI or report-rate
+    /// write at all.
+    #[must_use]
+    pub fn current_mouse_unresponsive(&self) -> bool {
+        self.current_record().is_some_and(|record| {
+            self.pointer
+                .unresponsive_mice
+                .contains(&record.device_key())
+        })
     }
 
     /// The DPI value currently shown by the active pointer editor.

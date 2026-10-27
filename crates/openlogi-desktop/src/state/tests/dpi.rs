@@ -405,3 +405,57 @@ fn a_write_that_did_not_reach_the_mouse_reads_it_again(cx: &mut gpui::TestAppCon
         (Dpi::new(1600), Dpi::new(1600), Some(SAVED))
     );
 }
+
+#[test]
+fn an_unanswered_write_flags_the_mouse_until_the_next_write_lands() {
+    let (mut state, mut receiver) = mouse_with_a_saved_dpi();
+    let key = mouse_key(&state);
+    assert!(!state.current_mouse_unresponsive());
+
+    let write = commit(&mut state, &mut receiver, Dpi::new(1600));
+    let events = state.apply_dpi_written(
+        &key,
+        write,
+        Dpi::new(1600),
+        Err(WriteError::RawDeviceUnresponsive),
+    );
+
+    assert_eq!(events, [StateEvent::DpiChanged(key.clone())]);
+    assert!(state.current_mouse_unresponsive());
+    assert_eq!(state.config.dpi(KNOWN_MOUSE_KEY), Some(SAVED));
+    assert_eq!(state.dpi(), SAVED, "the editor falls back as before");
+
+    let retry = commit(&mut state, &mut receiver, Dpi::new(1600));
+    assert!(
+        !state.current_mouse_unresponsive(),
+        "a retry clears the message"
+    );
+    let _ = state.apply_dpi_written(
+        &key,
+        retry,
+        Dpi::new(1600),
+        Err(WriteError::RawDeviceUnresponsive),
+    );
+    assert!(state.current_mouse_unresponsive());
+
+    let landed = commit(&mut state, &mut receiver, Dpi::new(2400));
+    let _ = state.apply_dpi_written(&key, landed, Dpi::new(2400), Ok(()));
+    assert!(!state.current_mouse_unresponsive());
+    assert_eq!(state.config.dpi(KNOWN_MOUSE_KEY), Some(Dpi::new(2400)));
+}
+
+#[test]
+fn another_failed_write_does_not_flag_the_mouse() {
+    let (mut state, mut receiver) = mouse_with_a_saved_dpi();
+    let key = mouse_key(&state);
+    let write = commit(&mut state, &mut receiver, Dpi::new(1600));
+
+    let _ = state.apply_dpi_written(
+        &key,
+        write,
+        Dpi::new(1600),
+        Err(WriteError::DeviceUnreachable { index: 0xff }),
+    );
+
+    assert!(!state.current_mouse_unresponsive());
+}

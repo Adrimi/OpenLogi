@@ -18,6 +18,10 @@ pub(super) struct PointerState {
     /// yet. Only that write's answer may change the shown DPI.
     pub(super) pending_dpi_writes: HashMap<DeviceKey, u64>,
     pub(super) next_dpi_write: u64,
+    /// The mice behind a receiver that did not answer their last DPI or
+    /// report-rate write with `RawDeviceUnresponsive`. Cleared by the next write
+    /// to that mouse.
+    pub(super) unresponsive_mice: HashSet<DeviceKey>,
     /// The mice whose last pointer-speed write the mouse refused or the agent
     /// could not deliver.
     pub(super) refused_pointer_speeds: HashSet<DeviceKey>,
@@ -39,6 +43,7 @@ impl Default for PointerState {
             next_smartshift_write_id: 0,
             pending_dpi_writes: HashMap::new(),
             next_dpi_write: 0,
+            unresponsive_mice: HashSet::new(),
             refused_pointer_speeds: HashSet::new(),
             refused_force_sensing: HashSet::new(),
             pending_force_sensing_writes: HashMap::new(),
