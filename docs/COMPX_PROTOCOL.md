@@ -134,7 +134,7 @@ not yet hardware-verified. "Reply" lists payload bytes only.
 | `0x18` | Set receiver light bar | 6 bytes, undecoded | status | D |
 | `0x19` | Get receiver light bar | none | 6 bytes, undecoded | D |
 | `0x1A` | Bind receiver id into mouse | u16 little-endian at `payload[8..10]` | status | D |
-| `0x20` | Read serial | none | serial bytes | D |
+| `0x20` | Read serial | none | 10 payload bytes, copied verbatim by the vendor DLL; opaque token, all-zero or all-0xFF = unprovisioned (D) |
 | `0x2B` | RSSI | none | `[0]` signal strength | D |
 | `0x2C` | Set receiver indicator LED | 3 bytes: source, 2 params | status | D |
 | `0x2D` | Get receiver indicator LED | none | 3 bytes: source, 2 params | D |

@@ -45,7 +45,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use thiserror::Error;
 
 pub use self::link::{
-    is_compx_route, read_dpi_info, read_report_rate_info, refresh_standalone, set_dpi,
+    KnownMouse, is_compx_route, read_dpi_info, read_report_rate_info, refresh_standalone, set_dpi,
     set_report_rate,
 };
 
@@ -598,6 +598,37 @@ impl Battery {
             charging,
             millivolts: u16::from_be_bytes([payload[2], payload[3]]),
         })
+    }
+}
+
+/// The mouse serial number from an [`Opcode::SerialNumber`] reply.
+///
+/// The vendor driver's `UsbFinder_GetMouseSerialNumber` copies the reply's
+/// ten payload bytes (report offsets 6–15) to its caller verbatim, so the
+/// serial is an opaque ten-byte token; how the factory encodes it inside
+/// those bytes is not decoded. A mouse that was never provisioned reads back
+/// all zeroes or all `0xff` (blank flash), which is no identity at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SerialNumber([u8; PAYLOAD_LEN]);
+
+impl SerialNumber {
+    /// Decode a serial reply; `None` for the blank values that carry no
+    /// identity.
+    ///
+    /// # Errors
+    ///
+    /// [`ResponseError::WrongReply`] for another command's reply.
+    pub fn decode(response: &Response) -> Result<Option<Self>, ResponseError> {
+        let payload = *response.expect(Opcode::SerialNumber)?;
+        let blank =
+            payload.iter().all(|byte| *byte == 0x00) || payload.iter().all(|byte| *byte == 0xff);
+        Ok((!blank).then_some(Self(payload)))
+    }
+}
+
+impl std::fmt::Display for SerialNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
     }
 }
 

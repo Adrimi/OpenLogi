@@ -8,13 +8,18 @@ use openlogi_core::hid::dpi::Dpi;
 use openlogi_core::hid::report_rate::ReportRate;
 use openlogi_core::hid::{DeviceRoute, WriteError};
 
-use super::{read_dpi_info, read_report_rate_info, refresh_standalone, set_dpi, set_report_rate};
+use super::{
+    CHECK_INTERVAL, KnownMouse, LAST_GOOD_GRACE, read_dpi_info, read_report_rate_info,
+    refresh_standalone, set_dpi, set_report_rate,
+};
 use crate::backend::{
     BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawDuplex, RawWriter,
 };
 use crate::compx::config::tests::dump;
 use crate::compx::{REPORT_LEN, checksum};
 use crate::inventory::standalone::enumerate_standalone;
+
+const SERIAL: [u8; 10] = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x00, 0x01];
 
 /// How the simulated mouse treats requests.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,6 +62,10 @@ impl Mouse {
             0x04 => {
                 reply[5] = 2;
                 reply[6..10].copy_from_slice(&[0x14, 0x00, 0x0e, 0x1c]);
+            }
+            0x20 => {
+                reply[5] = 10;
+                reply[6..16].copy_from_slice(&SERIAL);
             }
             0x08 => reply[6..6 + length].copy_from_slice(&self.flash[address..address + length]),
             0x07 => {
@@ -181,7 +190,7 @@ async fn refresh_reports_battery_and_enables_measured_controls() {
     let backend = MouseBackend::new(Behaviour::Awake);
     let mut devices = discovered(&backend).await;
 
-    refresh_standalone(&backend, &mut devices).await;
+    refresh_standalone(&backend, &mut devices, &[]).await;
 
     let battery = devices[0].battery.clone().expect("battery read");
     assert_eq!(battery.percentage, Some(20));
@@ -202,7 +211,7 @@ async fn a_sleeping_mouse_keeps_no_battery_or_controls() {
     let mut devices = discovered(&backend).await;
     let before = devices[0].capabilities;
 
-    refresh_standalone(&backend, &mut devices).await;
+    refresh_standalone(&backend, &mut devices, &[]).await;
 
     assert!(devices[0].battery.is_none());
     assert_eq!(devices[0].capabilities, before);
@@ -315,5 +324,113 @@ async fn a_route_to_another_device_is_not_found() {
             .await
             .map(|info| info.current),
         Err(WriteError::DeviceNotFound)
+    );
+}
+
+async fn refreshed(
+    backend: &MouseBackend,
+    known: &[KnownMouse],
+) -> (StandaloneDevice, Vec<KnownMouse>) {
+    let mut devices = discovered(backend).await;
+    let known = refresh_standalone(backend, &mut devices, known).await;
+    (devices.remove(0), known)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_refresh_reads_the_serial_as_a_physical_identity() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+
+    let (device, known) = refreshed(&backend, &[]).await;
+
+    assert_eq!(
+        device.serial_number.as_deref(),
+        Some("31323334353637380001")
+    );
+    assert_eq!(known.len(), 1);
+    assert_eq!(known[0].route(), &route());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_known_mouse_is_not_touched_while_its_reading_is_fresh() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let (_, known) = refreshed(&backend, &[]).await;
+    let sent = backend.with(|mouse| mouse.requests.len());
+
+    tokio::time::advance(CHECK_INTERVAL / 2).await;
+    let (device, known) = refreshed(&backend, &known).await;
+
+    assert_eq!(backend.with(|mouse| mouse.requests.len()), sent);
+    assert_eq!(device.battery.and_then(|b| b.percentage), Some(20));
+    assert_eq!(known.len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_due_check_reads_only_the_battery() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let (_, known) = refreshed(&backend, &[]).await;
+    backend.with(|mouse| mouse.requests.clear());
+
+    tokio::time::advance(CHECK_INTERVAL).await;
+    let (device, _) = refreshed(&backend, &known).await;
+
+    assert_eq!(
+        backend.with(|mouse| mouse.requests.clone()),
+        vec![0x02, 0x04, 0x02],
+        "attach, battery, detach and no flash or serial read"
+    );
+    assert_eq!(device.battery.and_then(|b| b.percentage), Some(20));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_silent_mouse_keeps_its_last_good_state_for_a_bounded_grace() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let (_, known) = refreshed(&backend, &[]).await;
+    backend.with(|mouse| mouse.behaviour = Behaviour::Asleep);
+
+    tokio::time::advance(CHECK_INTERVAL).await;
+    let (device, known) = refreshed(&backend, &known).await;
+
+    assert_eq!(device.battery.and_then(|b| b.percentage), Some(20));
+    let capabilities = device.capabilities.expect("capabilities");
+    assert!(capabilities.pointer && capabilities.report_rate);
+    assert_eq!(
+        device.serial_number.as_deref(),
+        Some("31323334353637380001")
+    );
+    assert_eq!(known.len(), 1);
+
+    tokio::time::advance(LAST_GOOD_GRACE).await;
+    let (device, known) = refreshed(&backend, &known).await;
+
+    assert!(device.battery.is_none());
+    assert!(known.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_mouse_that_answers_again_after_silence_is_refreshed() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let (_, known) = refreshed(&backend, &[]).await;
+    backend.with(|mouse| mouse.behaviour = Behaviour::Asleep);
+    tokio::time::advance(CHECK_INTERVAL).await;
+    let (_, known) = refreshed(&backend, &known).await;
+    backend.with(|mouse| mouse.behaviour = Behaviour::Awake);
+
+    tokio::time::advance(CHECK_INTERVAL).await;
+    let (device, known) = refreshed(&backend, &known).await;
+
+    assert_eq!(device.battery.and_then(|b| b.percentage), Some(20));
+    assert_eq!(known.len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_vanished_receiver_leaves_nothing_to_replay() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let (_, known) = refreshed(&backend, &[]).await;
+
+    let mut none: Vec<StandaloneDevice> = Vec::new();
+    assert!(
+        refresh_standalone(&backend, &mut none, &known)
+            .await
+            .is_empty()
     );
 }

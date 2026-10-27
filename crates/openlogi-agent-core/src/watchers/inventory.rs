@@ -13,6 +13,7 @@ use std::time::{Instant, SystemTime};
 
 use futures_lite::StreamExt as _;
 use openlogi_core::device::{DeviceInventory, StandaloneDevice};
+use openlogi_hid::compx::KnownMouse;
 use openlogi_hid::inventory::events::{BacklightUpdate, HidppEventSource, LockKeyUpdate};
 use openlogi_hid::{ChannelRegistry, DeviceIoGate};
 use openlogi_ipc::LockKeyChange;
@@ -108,6 +109,10 @@ struct WatchState {
 #[derive(Default)]
 struct RawNodeLedger {
     entries: BTreeMap<String, RawNodeEntry>,
+    /// What the last completed pass learned about each Compx mouse: the
+    /// last-good battery and identity its refresh replays while the mouse is
+    /// briefly silent, within its own bounded grace.
+    compx: Vec<KnownMouse>,
 }
 
 struct RawNodeEntry {
@@ -141,6 +146,7 @@ impl RawNodeLedger {
                 self.entries.remove(&key);
             } else {
                 entry.device.online = false;
+                entry.device.battery = None;
             }
         }
 
@@ -148,6 +154,11 @@ impl RawNodeLedger {
             .values()
             .map(|entry| entry.device.clone())
             .collect()
+    }
+
+    /// Keep what a completed pass learned about the Compx mice.
+    fn remember_compx(&mut self, compx: Vec<KnownMouse>) {
+        self.compx = compx;
     }
 
     /// Return the last completed raw-HID snapshot without counting a miss.
@@ -555,7 +566,15 @@ impl InventoryWorker {
     ) -> bool {
         let (event, outcome, replaced) = match result {
             Ok(inventories) => {
-                let standalone = self.hardware.enumerate_standalone().await;
+                let known = self.state.raw_nodes.compx.clone();
+                let standalone = self
+                    .hardware
+                    .enumerate_standalone(&known)
+                    .await
+                    .map(|scan| {
+                        self.state.raw_nodes.remember_compx(scan.compx);
+                        scan.devices
+                    });
                 let standalone_failed = standalone.is_err();
                 let open_failures = self.enumerator.open_failures_last_tick();
                 let event = self.state.classify_parts(
@@ -809,6 +828,23 @@ mod tests {
         assert_matches!(
             state.classify(Ok((vec![], vec![raw_light("id:node")]))) ,
             Some(InventoryEvent::Snapshot { standalone, .. }) if standalone.len() == 1 && standalone[0].online
+        );
+    }
+
+    #[test]
+    fn an_omitted_node_does_not_replay_its_battery() {
+        let mut state = WatchState::default();
+        let mut mouse = raw_light("id:node");
+        mouse.battery = Some(openlogi_core::device::BatteryInfo {
+            percentage: Some(60),
+            level: openlogi_core::device::BatteryLevel::Good,
+            status: openlogi_core::device::BatteryStatus::Discharging,
+        });
+        let _ = state.classify(Ok((vec![], vec![mouse])));
+        assert_matches!(
+            state.classify(Ok((vec![], vec![]))),
+            Some(InventoryEvent::Snapshot { standalone, .. })
+                if standalone.len() == 1 && !standalone[0].online && standalone[0].battery.is_none()
         );
     }
 

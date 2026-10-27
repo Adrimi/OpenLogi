@@ -1,6 +1,6 @@
 use super::{
     Battery, FirmwareVersion, IndicatorLed, IndicatorSource, LongRange, Opcode, PAYLOAD_LEN,
-    PcDriver, REPORT_LEN, Request, RequestError, Response, ResponseError, checksum,
+    PcDriver, REPORT_LEN, Request, RequestError, Response, ResponseError, SerialNumber, checksum,
 };
 
 fn hex(text: &str) -> Vec<u8> {
@@ -235,4 +235,50 @@ fn pairing_and_binding_follow_the_vendor_layout() {
     let bind = Request::bind_receiver(0x1234);
     assert_eq!(&bind.as_bytes()[14..16], &[0x34, 0x12]);
     assert_eq!(bind.as_bytes()[16], checksum(&bind.as_bytes()[..16]));
+}
+
+fn serial_reply(payload: [u8; PAYLOAD_LEN]) -> Response {
+    let mut frame = [0u8; REPORT_LEN];
+    frame[0] = 0x08;
+    frame[1] = 0x20;
+    frame[5] = 10;
+    frame[6..16].copy_from_slice(&payload);
+    frame[16] = checksum(&frame[..16]);
+    Response::parse(&frame).expect("valid frame")
+}
+
+#[test]
+fn serial_reply_keeps_all_ten_payload_bytes() {
+    let response = serial_reply([0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0xab, 0xcd]);
+
+    assert!(Request::serial_number().is_answered_by(&response));
+    let serial = SerialNumber::decode(&response)
+        .expect("serial reply")
+        .expect("an identity");
+    assert_eq!(serial.to_string(), "3132333435363738abcd");
+}
+
+#[test]
+fn blank_serials_are_no_identity() {
+    for blank in [[0x00; PAYLOAD_LEN], [0xff; PAYLOAD_LEN]] {
+        assert_eq!(SerialNumber::decode(&serial_reply(blank)), Ok(None));
+    }
+    let mostly_blank = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe];
+    assert!(matches!(
+        SerialNumber::decode(&serial_reply(mostly_blank)),
+        Ok(Some(_))
+    ));
+}
+
+#[test]
+fn serial_decoder_refuses_another_reply() {
+    let response = Response::parse(&hex(BATTERY_REPLY)).expect("valid reply");
+
+    assert_eq!(
+        SerialNumber::decode(&response),
+        Err(ResponseError::WrongReply {
+            expected: Opcode::SerialNumber,
+            found: Opcode::Battery,
+        })
+    );
 }

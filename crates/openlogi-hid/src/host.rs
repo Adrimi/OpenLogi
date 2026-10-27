@@ -298,7 +298,7 @@ pub async fn enumerate_standalone() -> Result<Vec<StandaloneDevice>, InventoryEr
     let backend = native_backend();
     let mut devices =
         openlogi_device::inventory::standalone::enumerate_standalone(&*backend).await?;
-    openlogi_device::compx::refresh_standalone(&*backend, &mut devices).await;
+    openlogi_device::compx::refresh_standalone(&*backend, &mut devices, &[]).await;
     Ok(devices)
 }
 

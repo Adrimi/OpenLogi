@@ -14,10 +14,11 @@ use openlogi_core::hid::report_rate::{ReportRate as WireReportRate, ReportRateIn
 use openlogi_core::hid::{DeviceRoute, WriteError};
 use openlogi_device_registry::compx::find_compx;
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use super::config::{self, ConfigChangeError, Dpi, FlashImage, MouseConfig, ReportRate};
-use super::{Battery, PcDriver, REPORT_LEN, Request, Response, ResponseError};
+use super::{Battery, PcDriver, REPORT_LEN, Request, Response, ResponseError, SerialNumber};
 use crate::backend::{HidBackend, NodeInfo, RawDuplex};
 use crate::channel::route::find_raw_route_node;
 
@@ -41,6 +42,14 @@ const RECEIVER_RATES: [ReportRate; 4] = [
     ReportRate::Hz500,
     ReportRate::Hz1000,
 ];
+
+/// The least time between two sessions that check one known mouse. The
+/// agent's recovery scan runs about twice a minute, and a battery moves far
+/// slower than that.
+const CHECK_INTERVAL: Duration = Duration::from_mins(2);
+/// How long a mouse that stopped answering keeps its last-good battery and
+/// controls before it is shown without them.
+const LAST_GOOD_GRACE: Duration = Duration::from_mins(10);
 
 static SESSION: Mutex<()> = Mutex::const_new(());
 
@@ -106,6 +115,13 @@ impl Link {
             image.accept(&response).map_err(protocol)?;
         }
         MouseConfig::parse(&image).map_err(protocol)
+    }
+
+    /// The mouse serial, or `None` when it has none worth keying on or does
+    /// not answer; neither may fail the session that asked.
+    async fn serial_number(&mut self) -> Option<SerialNumber> {
+        let response = self.transact(&Request::serial_number()).await.ok()?;
+        SerialNumber::decode(&response).ok().flatten()
     }
 
     async fn battery(&mut self) -> Result<Battery, WriteError> {
@@ -257,33 +273,126 @@ pub async fn set_report_rate(
     .await
 }
 
-/// Fill the live fields of every Compx device in `devices`: battery, and
-/// the DPI and polling-rate capabilities once its configuration reads.
+/// What the last answered refresh learned about one Compx mouse.
 ///
-/// A mouse that does not answer — asleep, switched off, or out of range —
-/// keeps no battery and no capabilities, exactly as enumeration left it.
-pub async fn refresh_standalone(backend: &dyn HidBackend, devices: &mut [StandaloneDevice]) {
+/// The caller owns these between refreshes — the agent keeps them in its
+/// standalone-node ledger next to the last-good device descriptors — and
+/// hands them back to [`refresh_standalone`]. That is what lets a refresh
+/// skip the mouse while its reading is fresh, read only the battery once the
+/// controls are verified, and replay a briefly silent mouse's last-good
+/// state instead of dropping it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownMouse {
+    route: DeviceRoute,
+    battery: BatteryInfo,
+    serial: Option<SerialNumber>,
+    checked_at: Instant,
+    read_at: Instant,
+}
+
+impl KnownMouse {
+    /// The route of the mouse these readings belong to.
+    #[must_use]
+    pub fn route(&self) -> &DeviceRoute {
+        &self.route
+    }
+
+    fn answered(self, battery: Battery, now: Instant) -> Self {
+        Self {
+            battery: battery_info(battery),
+            checked_at: now,
+            read_at: now,
+            ..self
+        }
+    }
+
+    /// The state after a check the mouse did not answer: replayed while the
+    /// last answer is younger than [`LAST_GOOD_GRACE`], gone after.
+    fn unanswered(self, now: Instant) -> Option<Self> {
+        (now.saturating_duration_since(self.read_at) < LAST_GOOD_GRACE).then_some(Self {
+            checked_at: now,
+            ..self
+        })
+    }
+
+    fn is_fresh(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.checked_at) < CHECK_INTERVAL
+    }
+
+    fn apply(&self, device: &mut StandaloneDevice) {
+        device.battery = Some(self.battery.clone());
+        if let Some(serial) = self.serial {
+            device.serial_number = Some(serial.to_string());
+        }
+        let capabilities = device.capabilities.get_or_insert_default();
+        capabilities.pointer = true;
+        capabilities.report_rate = true;
+    }
+}
+
+/// Fill the live fields of every Compx device in `devices`: battery, the DPI
+/// and polling-rate capabilities once its configuration reads, and the
+/// physical identity once its serial reads. Returns what is now known about
+/// each mouse, to pass back as `known` on the next call; a mouse absent from
+/// `devices` is absent from the result, so a vanished receiver is gone, not
+/// last-good.
+///
+/// A mouse first seen gets one full session (battery, flash, serial). After
+/// that it is checked at most every [`CHECK_INTERVAL`], with a battery-only
+/// session, and a mouse that does not answer — asleep, switched off, or out
+/// of range — keeps its last-good state for [`LAST_GOOD_GRACE`].
+pub async fn refresh_standalone(
+    backend: &dyn HidBackend,
+    devices: &mut [StandaloneDevice],
+    known: &[KnownMouse],
+) -> Vec<KnownMouse> {
+    let mut refreshed = Vec::new();
     for device in devices
         .iter_mut()
         .filter(|device| is_compx_route(&device.route()))
     {
         let route = device.route();
-        let status = with_link(backend, &route, async |link| {
-            let battery = link.battery().await?;
-            let config = link.read_config().await?;
-            Ok((battery, config))
-        })
-        .await;
-        match status {
-            Ok((battery, _config)) => {
-                device.battery = Some(battery_info(battery));
-                let capabilities = device.capabilities.get_or_insert_default();
-                capabilities.pointer = true;
-                capabilities.report_rate = true;
+        let now = Instant::now();
+        let prior = known.iter().find(|mouse| mouse.route == route).cloned();
+        let mouse = match prior {
+            Some(prior) if prior.is_fresh(now) => Some(prior),
+            Some(prior) => {
+                match with_link(backend, &route, async |link| link.battery().await).await {
+                    Ok(battery) => Some(prior.answered(battery, now)),
+                    Err(error) => {
+                        debug!(%error, "Compx mouse did not report its battery");
+                        prior.unanswered(now)
+                    }
+                }
             }
-            Err(error) => debug!(%error, "Compx mouse did not report its state"),
+            None => {
+                let first = with_link(backend, &route, async |link| {
+                    let battery = link.battery().await?;
+                    link.read_config().await?;
+                    Ok((battery, link.serial_number().await))
+                })
+                .await;
+                match first {
+                    Ok((battery, serial)) => Some(KnownMouse {
+                        route: route.clone(),
+                        battery: battery_info(battery),
+                        serial,
+                        checked_at: now,
+                        read_at: now,
+                    }),
+                    Err(error) => {
+                        debug!(%error, "Compx mouse did not report its state");
+                        None
+                    }
+                }
+            }
+        };
+        if let Some(mouse) = mouse {
+            mouse.apply(device);
+            refreshed.push(mouse);
         }
     }
+    refreshed
 }
 
 fn dpi_info(config: &MouseConfig) -> Result<DpiInfo, WriteError> {

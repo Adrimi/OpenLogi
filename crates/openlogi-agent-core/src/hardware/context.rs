@@ -7,6 +7,7 @@ use openlogi_core::hid::dpi::{Dpi, DpiInfo};
 use openlogi_core::hid::report_rate::{ReportRate, ReportRateInfo};
 use openlogi_core::hid::{LightCommand, PairingError, WriteError};
 use openlogi_hid::backend::{HidBackend, HotplugStream};
+use openlogi_hid::compx::KnownMouse;
 use openlogi_hid::inventory::persist::ProbeCacheStore;
 use openlogi_hid::pairing::ReceiverIdentityCache;
 use openlogi_hid::{
@@ -14,6 +15,13 @@ use openlogi_hid::{
     LightWatch, LitraModel, PairingCommand, PairingEvent, ReceiverSelector,
 };
 use tokio::sync::mpsc;
+
+/// One standalone enumeration: the devices, and what the pass learned about
+/// each Compx mouse for the next one.
+pub(crate) struct StandaloneScan {
+    pub(crate) devices: Vec<StandaloneDevice>,
+    pub(crate) compx: Vec<KnownMouse>,
+}
 
 /// One coherent source for every backend-dependent agent hardware service.
 ///
@@ -104,14 +112,17 @@ impl HardwareContext {
     }
 
     /// Standalone devices, with the live state of any Compx mouse read in the
-    /// same pass so its battery and controls follow the inventory.
+    /// same pass so its battery and controls follow the inventory. `known` is
+    /// what the previous pass learned about those mice.
     pub(crate) async fn enumerate_standalone(
         &self,
-    ) -> Result<Vec<StandaloneDevice>, InventoryError> {
+        known: &[KnownMouse],
+    ) -> Result<StandaloneScan, InventoryError> {
         let mut devices =
             openlogi_hid::inventory::standalone::enumerate_standalone(&*self.backend).await?;
-        openlogi_hid::compx::refresh_standalone(&*self.backend, &mut devices).await;
-        Ok(devices)
+        let compx =
+            openlogi_hid::compx::refresh_standalone(&*self.backend, &mut devices, known).await;
+        Ok(StandaloneScan { devices, compx })
     }
 
     pub(crate) async fn compx_dpi_info(&self, route: &DeviceRoute) -> Result<DpiInfo, WriteError> {
