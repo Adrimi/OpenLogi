@@ -16,6 +16,8 @@ pub mod error;
 pub mod fn_lock;
 pub mod force_sensing;
 pub mod light;
+pub mod mouse_settings;
+pub mod onboard_dpi;
 pub mod pairing;
 pub mod pointer_speed;
 pub mod report_rate;
@@ -34,6 +36,14 @@ pub use error::{HidppFeatureErrorKind, HidppOperation, WriteError};
 pub use fn_lock::FnLockState;
 pub use force_sensing::ForceSensingInfo;
 pub use light::{LightCommand, commands_for_light_settings};
+pub use mouse_settings::{
+    AngleAdjustment, BodyLight, BodyLightMode, ButtonDebounce, DpiLed, DpiLedEffect, IdleTimeout,
+    Level, LiftOffDistance, MouseSettings, MouseSettingsChange, OutOfRange, SensorMode,
+    SensorSwitch, SensorSwitches, WheelDebounce,
+};
+pub use onboard_dpi::{
+    NO_ONBOARD_STAGES_FEATURE, OnboardDpiStage, OnboardDpiStages, OnboardDpiStagesChange,
+};
 pub use pairing::{Click, PairingError, PasskeyMethod, ReceiverSelector};
 pub use pointer_speed::PointerSpeed;
 pub use report_rate::{ReportRate, ReportRateInfo};

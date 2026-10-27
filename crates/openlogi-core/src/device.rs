@@ -208,6 +208,17 @@ pub struct Capabilities {
     /// `force_sensing`: crosses the IPC and the persisted identity.
     #[serde(default)]
     pub disable_keys: bool,
+    /// The mouse stores its own DPI stages, which its DPI button steps
+    /// through and its LED colours, and software can read and replace them
+    /// (the Compx family). Appended after `disable_keys`: crosses the IPC and
+    /// the persisted identity.
+    #[serde(default)]
+    pub onboard_dpi_stages: bool,
+    /// The mouse stores sensor, timing and lighting settings of its own that
+    /// software can read and change (the Compx family). Appended after
+    /// `onboard_dpi_stages`: crosses the IPC and the persisted identity.
+    #[serde(default)]
+    pub mouse_settings: bool,
 }
 
 impl Capabilities {
@@ -248,6 +259,8 @@ impl Capabilities {
             // force; the feature table alone cannot say.
             force_sensing: ids.contains(&0x19c0),
             disable_keys: ids.contains(&0x4521),
+            onboard_dpi_stages: false,
+            mouse_settings: false,
         }
     }
 
@@ -772,6 +785,8 @@ mod tests {
                     pointer_scaling: false,
                     force_sensing: false,
                     disable_keys: false,
+                    onboard_dpi_stages: false,
+                    mouse_settings: false,
                 }),
                 settings_revision: 0,
             }],
@@ -893,6 +908,8 @@ mod tests {
                 pointer_scaling: false,
                 force_sensing: false,
                 disable_keys: false,
+                onboard_dpi_stages: false,
+                mouse_settings: false,
             }
         );
         assert!(!Capabilities::from_feature_ids(&[0x0003, 0x1b04]).thumbwheel);
@@ -919,6 +936,8 @@ mod tests {
                 pointer_scaling: false,
                 force_sensing: false,
                 disable_keys: false,
+                onboard_dpi_stages: false,
+                mouse_settings: false,
             }
         );
         // No driving features → nothing offered.

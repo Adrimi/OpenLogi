@@ -266,6 +266,14 @@ pub enum WriteError {
     /// request, a damaged reply, or a value its driver does not define.
     #[error("raw device protocol error: {0}")]
     RawDeviceProtocol(String),
+    /// The mouse acknowledged a write of its onboard DPI stages but reads
+    /// back a different list or active stage.
+    #[error("the mouse reports different DPI stages after the write")]
+    OnboardDpiStagesNotApplied,
+    /// The mouse acknowledged a write of one of its sensor, timing or
+    /// lighting settings but reads back another value.
+    #[error("the mouse reports a different setting after the write")]
+    MouseSettingNotApplied,
 }
 
 /// HID++ operation being performed when a device write/read failed.
