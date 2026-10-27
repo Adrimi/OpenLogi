@@ -57,6 +57,8 @@ mod fn_lock;
 pub(crate) mod force_sensing;
 mod light_adoption;
 mod lighting;
+mod mouse_settings;
+mod onboard_stages;
 mod os_layout;
 mod pointer_speed;
 mod profile_scope;

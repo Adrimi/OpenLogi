@@ -585,6 +585,8 @@ mod tests {
                 }),
                 capabilities: Some(Capabilities {
                     disable_keys: true,
+                    onboard_dpi_stages: false,
+                    mouse_settings: false,
                     ..Capabilities::default()
                 }),
             }],

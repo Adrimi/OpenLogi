@@ -31,6 +31,7 @@ use crate::features::lighting::standalone::LightPanel;
 use crate::features::lighting::visual as light_visual;
 use crate::features::mouse::view::MouseModelView;
 use crate::features::pointer::dpi::DpiPanel;
+use crate::features::pointer::mouse_settings::{MouseSettingsFacts, lighting_card, sensor_card};
 use crate::features::pointer::smartshift::SmartShiftPanel;
 use crate::features::profiles::{
     AppCatalogPicker, ProfileIconCache, action_ring_profile_scope_bar, button_profile_scope_bar,
@@ -329,6 +330,7 @@ fn pointer_tab(
             smartshift_panel.clone().into_any_element(),
         )
     });
+    let settings = MouseSettingsFacts::current(cx);
     tab_body(
         ContentWidth::Large,
         h_flex()
@@ -336,16 +338,22 @@ fn pointer_tab(
             .items_start()
             .gap_4()
             .flex_wrap()
-            .child(pointer_column(v_flex().gap_4().child(PanelCard::new(
-                tr!("device.pointer_tuning"),
-                Icon::empty().path("action-icons/gauge.svg"),
-                dpi_panel.clone().into_any_element(),
-            ))))
+            .child(pointer_column(
+                v_flex()
+                    .gap_4()
+                    .child(PanelCard::new(
+                        tr!("device.pointer_tuning"),
+                        Icon::empty().path("action-icons/gauge.svg"),
+                        dpi_panel.clone().into_any_element(),
+                    ))
+                    .children(sensor_card(settings.as_ref(), pal)),
+            ))
             .child(pointer_column(
                 v_flex()
                     .gap_4()
                     .children(smartshift_card)
-                    .child(scrolling_card(pal, cx)),
+                    .child(scrolling_card(pal, cx))
+                    .children(lighting_card(settings.as_ref(), pal)),
             )),
     )
 }

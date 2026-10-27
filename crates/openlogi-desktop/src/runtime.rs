@@ -348,6 +348,26 @@ impl Runtime {
                     });
                 });
             }
+            ipc::GuiUpdate::OnboardDpiStagesRead { key, result } => {
+                cx.update(|cx| {
+                    AppState::apply(cx, |state| state.apply_onboard_stages_read(&key, result));
+                });
+            }
+            ipc::GuiUpdate::OnboardDpiStagesWritten { key, result } => {
+                cx.update(|cx| {
+                    AppState::apply(cx, |state| state.apply_onboard_stages_written(&key, result));
+                });
+            }
+            ipc::GuiUpdate::MouseSettingsRead { key, result } => {
+                cx.update(|cx| {
+                    AppState::apply(cx, |state| state.apply_mouse_settings_read(&key, result));
+                });
+            }
+            ipc::GuiUpdate::MouseSettingsWritten { key, result } => {
+                cx.update(|cx| {
+                    AppState::apply(cx, |state| state.apply_mouse_settings_written(&key, result));
+                });
+            }
             ipc::GuiUpdate::PointerSpeedWritten { key, result } => {
                 cx.update(|cx| {
                     AppState::apply(cx, |state| state.apply_pointer_speed_written(&key, result));

@@ -68,6 +68,8 @@ fn install_keyboard_with_config(
         inventory.paired[0].kind = DeviceKind::Keyboard;
         inventory.paired[0].capabilities = Some(Capabilities {
             disable_keys: true,
+            onboard_dpi_stages: false,
+            mouse_settings: false,
             ..Capabilities::default()
         });
         let runtime: Arc<dyn swr_core::Runtime> = Arc::new(swr_gpui::GpuiRuntime::new(cx));

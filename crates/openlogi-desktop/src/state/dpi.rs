@@ -193,12 +193,14 @@ impl AppState {
             Ok(()) => {
                 self.pointer.unresponsive_mice.remove(key);
                 self.pointer.reads.set_dpi_current(key, dpi);
+                self.sync_onboard_active_dpi(key, dpi);
                 self.persist_dpi(key, dpi);
                 Some(dpi)
             }
             Err(WriteError::DpiNotApplied { actual, .. }) => {
                 warn!(key = %key, requested = %dpi, %actual, "device kept another DPI — not saving the request");
                 self.pointer.reads.set_dpi_current(key, actual);
+                self.sync_onboard_active_dpi(key, actual);
                 Some(actual)
             }
             Err(error @ WriteError::DpiUnsupported { .. }) => {

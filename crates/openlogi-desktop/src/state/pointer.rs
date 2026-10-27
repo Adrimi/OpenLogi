@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use openlogi_core::hid::Dpi;
+use openlogi_core::hid::{Dpi, MouseSettings, OnboardDpiStages};
 use swr_core::{Runtime, SwrClient};
 
 use crate::services::device_reads::DeviceReads;
@@ -36,6 +36,24 @@ pub(super) struct PointerState {
     /// DPI presets of devices with a transient identity, which have no config
     /// entry to hold them. They last until the app quits.
     pub(super) session_dpi_presets: HashMap<DeviceKey, Vec<Dpi>>,
+    /// The DPI stages each onboard-stage mouse last reported, or the list the
+    /// user just asked it to store.
+    pub(super) onboard_stages: HashMap<DeviceKey, OnboardDpiStages>,
+    /// The mice with a stage read in flight.
+    pub(super) onboard_stage_reads: HashSet<DeviceKey>,
+    /// How many stage writes each mouse has yet to answer.
+    pub(super) pending_onboard_stage_writes: HashMap<DeviceKey, u32>,
+    /// The mice whose last stage read failed and wait for a retry.
+    pub(super) failed_onboard_stage_reads: HashSet<DeviceKey>,
+    /// The sensor, timing and lighting settings each mouse last reported, or
+    /// the settings with the user's edits laid over them.
+    pub(super) mouse_settings: HashMap<DeviceKey, MouseSettings>,
+    /// The mice with a settings read in flight.
+    pub(super) mouse_setting_reads: HashSet<DeviceKey>,
+    /// The mice whose last settings read failed and wait for a retry.
+    pub(super) failed_mouse_setting_reads: HashSet<DeviceKey>,
+    /// How many settings writes each mouse has yet to answer.
+    pub(super) pending_mouse_setting_writes: HashMap<DeviceKey, u32>,
 }
 
 impl Default for PointerState {
@@ -52,6 +70,14 @@ impl Default for PointerState {
             pending_force_sensing_writes: HashMap::new(),
             next_force_sensing_write: 0,
             session_dpi_presets: HashMap::new(),
+            onboard_stages: HashMap::new(),
+            onboard_stage_reads: HashSet::new(),
+            pending_onboard_stage_writes: HashMap::new(),
+            failed_onboard_stage_reads: HashSet::new(),
+            mouse_settings: HashMap::new(),
+            mouse_setting_reads: HashSet::new(),
+            failed_mouse_setting_reads: HashSet::new(),
+            pending_mouse_setting_writes: HashMap::new(),
         }
     }
 }

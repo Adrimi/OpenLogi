@@ -88,6 +88,9 @@ mod inventory;
 mod light;
 mod lighting;
 mod load;
+mod mouse_settings;
+mod onboard_stages;
+pub(crate) use onboard_stages::STAGE_COLORS;
 mod os_layout;
 mod pointer;
 mod pointer_speed;
@@ -240,6 +243,8 @@ impl AppState {
     pub(crate) fn load_current_device_reads(cx: &mut App) {
         Self::update(cx, |state, cx| {
             state.load_current_dpi(cx);
+            state.load_current_onboard_stages();
+            state.load_current_mouse_settings();
             state.load_current_smartshift(cx);
             state.confirm_current_smartshift(cx);
             state.load_current_fn_lock(cx);

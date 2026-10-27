@@ -57,6 +57,8 @@ pub(crate) enum StateEvent {
     ReportRateChanged(DeviceKey),
     /// The mouse's pointer-speed read landed or changed.
     PointerSpeedChanged(DeviceKey),
+    /// The mouse's sensor, timing and lighting settings read landed or changed.
+    MouseSettingsChanged(DeviceKey),
     /// The device's press-force read landed or changed.
     ForceSensingChanged(DeviceKey),
     /// The keyboard's backlight read landed or changed.
@@ -99,6 +101,7 @@ impl StateEvent {
             | Self::FnLockChanged(key)
             | Self::ReportRateChanged(key)
             | Self::PointerSpeedChanged(key)
+            | Self::MouseSettingsChanged(key)
             | Self::ForceSensingChanged(key)
             | Self::BacklightChanged(key)
             | Self::EasySwitchChanged(key)
@@ -251,6 +254,7 @@ impl AppState {
             | StateEvent::FnLockChanged(_)
             | StateEvent::ReportRateChanged(_)
             | StateEvent::PointerSpeedChanged(_)
+            | StateEvent::MouseSettingsChanged(_)
             | StateEvent::ForceSensingChanged(_)
             | StateEvent::BacklightChanged(_)
             | StateEvent::EasySwitchChanged(_)

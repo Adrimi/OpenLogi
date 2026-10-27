@@ -363,7 +363,7 @@ impl AppView {
             }
             // The panel repaints itself; the root only decides whether the
             // Pointer tab still lists its card.
-            StateEvent::SmartShiftChanged(key) => {
+            StateEvent::SmartShiftChanged(key) | StateEvent::MouseSettingsChanged(key) => {
                 !on_home && self.active_tab == DetailTab::Pointer && is_current(key)
             }
             StateEvent::DeviceConfigChanged(key) => {

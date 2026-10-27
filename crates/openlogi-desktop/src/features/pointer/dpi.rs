@@ -10,16 +10,16 @@
 
 use gpui::{
     AnyElement, Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Window,
-    div, px,
+    div, px, rgb,
 };
 use gpui_component::{
-    Icon, IconName, Selectable as _, Sizable as _,
+    Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     slider::{Slider, SliderState},
     v_flex,
 };
-use openlogi_core::hid::{Dpi, DpiCapabilities};
+use openlogi_core::hid::{Dpi, DpiCapabilities, OnboardDpiStage, OnboardDpiStages};
 use tracing::debug;
 
 use super::pointer_speed::{PointerSpeedFacts, PointerSpeedSlider, pointer_speed_section};
@@ -58,6 +58,12 @@ struct DpiPanelSnapshot {
     device_key: Option<DeviceKey>,
     dpi: Dpi,
     presets: Vec<Dpi>,
+    /// Whether the mouse stores its own DPI stages, which then replace the
+    /// host-side presets; `onboard` is the list once the mouse reported it.
+    onboard_supported: bool,
+    onboard: Option<OnboardDpiStages>,
+    /// Whether the last stage read failed and none is known.
+    onboard_read_failed: bool,
     status: DpiLoad,
     /// Whether the active device currently has a usable route. An offline
     /// device sits in `Unknown` forever (discovery can't start without a
@@ -229,7 +235,7 @@ impl DpiPanel {
                         div()
                             .text_body()
                             .text_color(pal.text_primary)
-                            .child(format!("{}", snapshot.dpi)),
+                            .child(dpi_reading(&snapshot)),
                     ),
             )
             .child(slider)
@@ -239,7 +245,17 @@ impl DpiPanel {
                     .text_color(pal.text_muted)
                     .child(range_label),
             )
-            .child(
+            .child(if snapshot.onboard_supported {
+                stages_block(
+                    snapshot.onboard.as_ref(),
+                    snapshot
+                        .onboard_read_failed
+                        .then(|| snapshot.device_key.clone())
+                        .flatten(),
+                    pal,
+                )
+                .into_any_element()
+            } else {
                 v_flex()
                     .gap_2()
                     .child(
@@ -254,9 +270,19 @@ impl DpiPanel {
                             .flex_wrap()
                             .children(preset_chips)
                             .child(add_preset_chip()),
-                    ),
-            )
+                    )
+                    .into_any_element()
+            })
             .into_any_element()
+    }
+}
+
+/// The DPI the header shows: only a value the mouse reported, never the
+/// editor's initial default, so a mouse that has not answered shows a dash.
+fn dpi_reading(snapshot: &DpiPanelSnapshot) -> String {
+    match snapshot.status {
+        DpiLoad::Ready(_) => format!("{}", snapshot.dpi),
+        _ => "–".to_owned(),
     }
 }
 
@@ -270,6 +296,9 @@ fn dpi_panel_snapshot(cx: &mut Context<DpiPanel>) -> DpiPanelSnapshot {
                 device_key: Some(device_key),
                 dpi: s.dpi(),
                 presets: s.dpi_presets(),
+                onboard_supported: s.current_onboard_stages_supported(),
+                onboard: s.onboard_dpi_stages().cloned(),
+                onboard_read_failed: s.onboard_stages_read_failed(),
                 reachable: record.route.is_some(),
             })
         })
@@ -277,6 +306,9 @@ fn dpi_panel_snapshot(cx: &mut Context<DpiPanel>) -> DpiPanelSnapshot {
             device_key: None,
             dpi: crate::state::DEFAULT_DPI,
             presets: Vec::new(),
+            onboard_supported: false,
+            onboard: None,
+            onboard_read_failed: false,
             status: DpiLoad::Unsupported(tr!("device.no_active_device").to_string()),
             reachable: false,
         })
@@ -417,4 +449,157 @@ fn add_preset_chip() -> impl IntoElement {
                 state.commit_dpi_presets(presets)
             });
         })
+}
+
+/// The DPI stages the mouse stores, as chips: one per stage with its LED
+/// colour, the active one highlighted. They stand where the host-side presets
+/// would.
+fn stages_block(
+    stages: Option<&OnboardDpiStages>,
+    failed_key: Option<DeviceKey>,
+    pal: Palette,
+) -> impl IntoElement {
+    let body = match stages {
+        None => match failed_key {
+            // Clickable in place, like the DPI retry.
+            Some(key) => retry_line(
+                "dpi-stages-retry",
+                tr!("pointer.couldnt_read_dpi_stages_click_to_retry"),
+                move |cx| {
+                    AppState::apply(cx, |state| state.retry_onboard_stages_read(&key));
+                },
+            )
+            .into_any_element(),
+            None => status_line(tr!("pointer.reading_dpi_stages"), pal).into_any_element(),
+        },
+        Some(stages) => {
+            let removable = stages.stages.len() > 1;
+            h_flex()
+                .gap_2()
+                .flex_wrap()
+                .children(stages.stages.iter().enumerate().map(|(idx, stage)| {
+                    stage_chip(
+                        idx,
+                        stage,
+                        idx == usize::from(stages.active),
+                        removable,
+                        pal,
+                    )
+                }))
+                .children(
+                    (stages.stages.len() < usize::from(stages.max_stages)).then(add_stage_chip),
+                )
+                .into_any_element()
+        }
+    };
+    v_flex()
+        .gap_2()
+        .child(
+            div()
+                .text_caption()
+                .text_color(pal.text_muted)
+                .child(tr!("pointer.dpi_stages")),
+        )
+        .child(body)
+}
+
+/// One onboard stage as a chip. Clicking it makes the mouse use that stage;
+/// the small × removes it while another stage remains.
+fn stage_chip(
+    idx: usize,
+    stage: &OnboardDpiStage,
+    active: bool,
+    removable: bool,
+    pal: Palette,
+) -> impl IntoElement {
+    let index = u8::try_from(idx).unwrap_or(u8::MAX);
+    PresetChip::new(("dpi-stage-chip", idx))
+        .selected(active)
+        .child(
+            div()
+                .size(px(10.))
+                .flex_none()
+                .rounded_full()
+                .border_1()
+                .border_color(pal.border)
+                .bg(rgb(stage.color.packed())),
+        )
+        .child(
+            Button::new(("dpi-stage-apply", idx))
+                .compact()
+                .ghost()
+                .h_full()
+                .flex()
+                .items_center()
+                .label(format!("{}", stage.dpi))
+                .selected(active)
+                .on_click(move |_event, _window, cx| {
+                    AppState::apply(cx, |state| state.select_onboard_stage(index));
+                }),
+        )
+        .child(
+            Button::new(("dpi-stage-remove", idx))
+                .xsmall()
+                .ghost()
+                .icon(IconName::Close)
+                .disabled(!removable)
+                .on_click(move |_event, _window, cx| {
+                    AppState::apply(cx, |state| state.remove_onboard_stage(index));
+                }),
+        )
+}
+
+/// "+" chip that appends the DPI the editor shows as a new onboard stage.
+fn add_stage_chip() -> impl IntoElement {
+    Button::new("dpi-stage-add")
+        .compact()
+        .outline()
+        .h(px(CHIP_H))
+        .icon(IconName::Plus)
+        .label(tr!("common.add"))
+        .on_click(|_event, _window, cx| {
+            AppState::apply(cx, AppState::add_onboard_stage);
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use openlogi_core::hid::{Dpi, DpiCapabilities, DpiInfo};
+
+    use super::{DpiLoad, DpiPanelSnapshot, dpi_reading};
+
+    fn snapshot(status: DpiLoad) -> DpiPanelSnapshot {
+        DpiPanelSnapshot {
+            device_key: None,
+            dpi: Dpi::new(1600),
+            presets: Vec::new(),
+            onboard_supported: false,
+            onboard: None,
+            onboard_read_failed: false,
+            status,
+            reachable: true,
+        }
+    }
+
+    #[test]
+    fn the_header_shows_a_dash_until_the_mouse_has_reported_its_dpi() {
+        for status in [
+            DpiLoad::Unknown,
+            DpiLoad::Loading,
+            DpiLoad::Failed("no answer".into()),
+        ] {
+            assert_eq!(dpi_reading(&snapshot(status)), "–");
+        }
+
+        let info = DpiInfo {
+            current: Dpi::new(1600),
+            capabilities: DpiCapabilities::new(vec![800, 1600]).expect("capabilities"),
+        };
+        assert_eq!(
+            dpi_reading(&snapshot(DpiLoad::Ready(Arc::new(info)))),
+            "1600"
+        );
+    }
 }

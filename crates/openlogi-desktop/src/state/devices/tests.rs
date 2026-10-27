@@ -315,6 +315,8 @@ fn mouse_identity(name: &str) -> DeviceIdentity {
             pointer_scaling: false,
             force_sensing: false,
             disable_keys: false,
+            onboard_dpi_stages: false,
+            mouse_settings: false,
         },
         light_capabilities: None,
         model_info: None,
