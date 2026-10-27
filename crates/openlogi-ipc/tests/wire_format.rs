@@ -982,17 +982,18 @@ fn standalone_light_dtos_commands_and_errors() {
         light_capabilities: Some(capabilities),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     };
 
     assert_wire(
         &standalone,
-        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c6974726101053863393030",
+        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c697472610105386339303000",
     );
     let mut legacy = standalone.clone();
     legacy.registry_model_id = None;
     assert_wire(
         &legacy,
-        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c6974726100",
+        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c697472610000",
     );
     assert_wire(&capabilities, "010114fa010101fb8c0afb641964020000");
     assert_wire(&brightness, "14fa0101");
@@ -1210,6 +1211,12 @@ fn force_sensing_dtos_and_errors() {
         },
         "1bfb9411fbe113",
     );
+}
+
+#[test]
+fn raw_device_errors_are_appended() {
+    assert_wire(&WriteError::RawDeviceUnresponsive, "1f");
+    assert_wire(&WriteError::RawDeviceProtocol("bad".into()), "2003626164");
 }
 
 #[test]

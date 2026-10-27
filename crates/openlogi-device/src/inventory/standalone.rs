@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use openlogi_core::device::{Capabilities, DeviceKind, RawDeviceAddress, StandaloneDevice};
+use openlogi_device_registry::compx::{COMPX_DRIVER_ID, find_compx};
 use openlogi_device_registry::g600::{G600_DRIVER_ID, G600_NAME, matches_g600};
 use openlogi_device_registry::headset::{GAMING_HEADSET_DRIVER_ID, find_gaming_headset};
 use openlogi_device_registry::litra::find_litra;
@@ -38,13 +39,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
         device.usage_id,
     ) {
         return Some(StandaloneDevice {
-            address: RawDeviceAddress {
-                vendor_id: device.vendor_id,
-                product_id: device.product_id,
-                usage_page: device.usage_page,
-                usage_id: device.usage_id,
-                identity: device.identity(),
-            },
+            address: raw_address(device),
             display_name: device.name.clone(),
             manufacturer: device.manufacturer.clone(),
             serial_number: device.serial_number.clone(),
@@ -55,6 +50,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: Some(litra_capabilities(descriptor.model)),
             driver_id: descriptor.driver_id.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
         });
     }
 
@@ -65,13 +61,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
         device.usage_id,
     ) {
         return Some(StandaloneDevice {
-            address: RawDeviceAddress {
-                vendor_id: device.vendor_id,
-                product_id: device.product_id,
-                usage_page: device.usage_page,
-                usage_id: device.usage_id,
-                identity: device.identity(),
-            },
+            address: raw_address(device),
             display_name: descriptor.name.to_owned(),
             manufacturer: device.manufacturer.clone(),
             serial_number: device.serial_number.clone(),
@@ -82,6 +72,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: None,
             driver_id: GAMING_HEADSET_DRIVER_ID.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
         });
     }
 
@@ -92,13 +83,7 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
         device.usage_id,
     ) {
         return Some(StandaloneDevice {
-            address: RawDeviceAddress {
-                vendor_id: device.vendor_id,
-                product_id: device.product_id,
-                usage_page: device.usage_page,
-                usage_id: device.usage_id,
-                identity: device.identity(),
-            },
+            address: raw_address(device),
             display_name: G600_NAME.to_owned(),
             manufacturer: device.manufacturer.clone(),
             serial_number: device.serial_number.clone(),
@@ -111,10 +96,45 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
             light_capabilities: None,
             driver_id: G600_DRIVER_ID.to_owned(),
             registry_model_id: None,
+            battery: None,
+        });
+    }
+
+    if let Some(descriptor) = find_compx(
+        device.vendor_id,
+        device.product_id,
+        device.usage_page,
+        device.usage_id,
+    ) {
+        return Some(StandaloneDevice {
+            address: raw_address(device),
+            display_name: descriptor.name.to_owned(),
+            manufacturer: device.manufacturer.clone(),
+            serial_number: device.serial_number.clone(),
+            unit_id: [0; 4],
+            kind: DeviceKind::Mouse,
+            online: true,
+            // Measured, not unknown, as for the G600: the Compx protocol has no
+            // HID++ controls for clients to presume.
+            capabilities: Some(Capabilities::default()),
+            light_capabilities: None,
+            driver_id: COMPX_DRIVER_ID.to_owned(),
+            registry_model_id: None,
+            battery: None,
         });
     }
 
     None
+}
+
+fn raw_address(device: &crate::backend::NodeInfo) -> RawDeviceAddress {
+    RawDeviceAddress {
+        vendor_id: device.vendor_id,
+        product_id: device.product_id,
+        usage_page: device.usage_page,
+        usage_id: device.usage_id,
+        identity: device.identity(),
+    }
 }
 
 /// Reject multiple nodes that the route cannot distinguish safely.
@@ -195,6 +215,37 @@ mod tests {
         assert!(device.light_capabilities.is_none());
     }
 
+    fn compx_node(usage_page: u16, usage_id: u16) -> NodeInfo {
+        NodeInfo {
+            id: NodeId::from("compx-node".to_string()),
+            vendor_id: 0x3554,
+            product_id: 0xf524,
+            usage_page,
+            usage_id,
+            name: "2.4G Wireless Receiver".into(),
+            manufacturer: Some("Compx".into()),
+            serial_number: None,
+        }
+    }
+
+    #[test]
+    fn compx_vendor_collection_is_a_standalone_mouse() {
+        let device =
+            standalone_device(&compx_node(0xff05, 0x0000)).expect("Compx receiver is recognized");
+
+        assert_eq!(device.kind, DeviceKind::Mouse);
+        assert_eq!(device.display_name, "Zaopin Wireless Mouse");
+        assert_eq!(device.driver_id, "compx");
+        assert_eq!(device.capabilities, Some(Capabilities::default()));
+        assert!(device.light_capabilities.is_none());
+    }
+
+    #[test]
+    fn compx_input_collections_are_ignored() {
+        assert!(standalone_device(&compx_node(0x0001, 0x0002)).is_none());
+        assert!(standalone_device(&compx_node(0xff03, 0x0000)).is_none());
+    }
+
     #[test]
     fn g600_mouse_and_keyboard_collections_are_ignored() {
         assert!(standalone_device(&g600_node(0x0001, 0x0002)).is_none());
@@ -220,6 +271,7 @@ mod tests {
             light_capabilities: None,
             driver_id: "litra".into(),
             registry_model_id: None,
+            battery: None,
         }
     }
 

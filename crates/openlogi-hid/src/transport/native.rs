@@ -7,13 +7,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use async_hid::{AsyncHidWrite as _, Device, DeviceWriter};
+use async_hid::{AsyncHidRead as _, AsyncHidWrite as _, Device, DeviceReader, DeviceWriter};
 use hidpp::async_trait;
 use hidpp::channel::HidppChannel;
 
 use openlogi_device::DeviceIoGate;
 use openlogi_device::backend::{
-    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawWriter,
+    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawDuplex, RawWriter,
 };
 
 use crate::recording::{
@@ -231,8 +231,51 @@ impl HidBackend for NativeBackend {
         }
     }
 
+    // Not recorded: device recordings capture HID++ channels and raw writes,
+    // and their replay backend has no input-report model to feed back.
+    async fn open_raw_duplex(&self, node: &NodeInfo) -> Result<Box<dyn RawDuplex>, BackendError> {
+        self.device_io.ensure_allowed()?;
+        let (reader, writer) = self
+            .handle(node)?
+            .open()
+            .await
+            .map_err(super::backend_error)?;
+        self.device_io.ensure_allowed()?;
+        Ok(Box::new(NativeRawDuplex {
+            reader,
+            writer,
+            device_io: self.device_io.clone(),
+        }))
+    }
+
     fn watch(&self) -> Result<HotplugStream, BackendError> {
         Ok(Box::new(watch_nodes()?))
+    }
+}
+
+/// [`RawDuplex`] over an `async-hid` reader and writer for one collection.
+struct NativeRawDuplex {
+    reader: DeviceReader,
+    writer: DeviceWriter,
+    device_io: DeviceIoGate,
+}
+
+#[async_trait]
+impl RawDuplex for NativeRawDuplex {
+    async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError> {
+        self.device_io.ensure_allowed()?;
+        self.writer
+            .write_output_report(report)
+            .await
+            .map_err(super::backend_error)
+    }
+
+    async fn read_input_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError> {
+        self.device_io.ensure_allowed()?;
+        self.reader
+            .read_input_report(buffer)
+            .await
+            .map_err(super::backend_error)
     }
 }
 

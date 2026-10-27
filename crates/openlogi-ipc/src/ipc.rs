@@ -158,6 +158,8 @@ pub use succession::Identity;
 ///      the macOS appearance switch and the default-input mute switch;
 ///      [`Agent::request_input_monitoring_access`] appended — the GUI asks the
 ///      agent to raise the macOS Input Monitoring request.
+///      `StandaloneDevice::battery` appended for Compx mice, and
+///      `WriteError::{RawDeviceUnresponsive, RawDeviceProtocol}` appended.
 pub const PROTOCOL_VERSION: u32 = 42;
 
 /// Environment variable through which the agent hands a supervised helper the

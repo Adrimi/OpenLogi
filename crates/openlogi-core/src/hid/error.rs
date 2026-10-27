@@ -258,6 +258,14 @@ pub enum WriteError {
         /// Operation whose result must not be persisted by its caller.
         operation: HidppOperation,
     },
+    /// A standalone raw-HID device behind a receiver — a sleeping or
+    /// switched-off Compx mouse — did not answer a request.
+    #[error("the device behind the receiver did not answer")]
+    RawDeviceUnresponsive,
+    /// A standalone raw-HID device answered outside its protocol: a rejected
+    /// request, a damaged reply, or a value its driver does not define.
+    #[error("raw device protocol error: {0}")]
+    RawDeviceProtocol(String),
 }
 
 /// HID++ operation being performed when a device write/read failed.

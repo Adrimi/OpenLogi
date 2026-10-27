@@ -21,6 +21,7 @@ mod device_io;
 
 pub mod backend;
 pub mod backlight;
+pub mod compx;
 pub mod host_lock;
 pub mod inventory;
 pub mod pairing;
@@ -31,7 +32,7 @@ pub mod thumbwheel;
 pub mod write;
 
 pub use backend::{
-    BackendError, HidBackend, HotplugEvent, HotplugStream, NodeId, NodeInfo, RawWriter,
+    BackendError, HidBackend, HotplugEvent, HotplugStream, NodeId, NodeInfo, RawDuplex, RawWriter,
 };
 pub use backlight::{
     BacklightChange, BacklightControls, BacklightDuration, BacklightMode, BacklightState,
