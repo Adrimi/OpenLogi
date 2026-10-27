@@ -197,6 +197,33 @@ async fn inventory_projects_mixed_devices_without_unrelated_private_state() {
 }
 
 #[tokio::test]
+async fn standalone_device_projects_its_battery() {
+    use openlogi_core::device::{BatteryInfo, BatteryLevel, BatteryStatus, StandaloneDevice};
+    use openlogi_fixture::{CANONICAL_DEVICE_PROFILE_JSON, DeviceProfile};
+
+    let profile: DeviceProfile = serde_json::from_str(CANONICAL_DEVICE_PROFILE_JSON).unwrap();
+    let template: StandaloneDevice = profile.standalone[0].clone();
+    let mut charged = template.clone();
+    charged.battery = Some(BatteryInfo {
+        percentage: Some(20),
+        level: BatteryLevel::Low,
+        status: BatteryStatus::Discharging,
+    });
+    let mut empty = template;
+    empty.battery = None;
+    let mut snapshot = snapshot();
+    snapshot.inventory.clear();
+    snapshot.standalone = vec![charged, empty];
+    let result = run_script(snapshot, ApiCommand::Devices, vec![]).await;
+    let devices = result["data"]["devices"].as_array().unwrap();
+    assert_eq!(
+        devices[0]["battery"],
+        json!({ "percentage": 20, "level": "low", "status": "discharging" })
+    );
+    assert_eq!(devices[1]["battery"], Value::Null);
+}
+
+#[tokio::test]
 async fn status_has_a_separate_explicit_json_contract() {
     let result = run_script(snapshot(), ApiCommand::Status, vec![]).await;
     assert_eq!(

@@ -101,7 +101,7 @@ fn entries(snapshot: &AgentSnapshot) -> Vec<(Option<DeviceRoute>, bool, Value)> 
             "name": device.display_name,
             "kind": device.kind,
             "online": device.online,
-            "battery": null,
+            "battery": device.battery,
             "capabilities": device.capabilities,
             "light_capabilities": device.light_capabilities,
         });
