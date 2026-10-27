@@ -13,19 +13,22 @@
 //! | `0x0c` | eight DPI stages, `[x, y, high bits, check]` |
 //! | `0x2c` | eight stage colours, `[r, g, b, check]` |
 //! | `0x60` | sixteen buttons, `[kind, a, b, check]` ([`ButtonAction`]) |
-//! | `0xa9` | button debounce, milliseconds |
 //!
-//! The remaining fields (`0x06`–`0x0a`, `0x4c`–`0x5f`, `0xab`–`0xed`) hold
-//! lighting, sensor and power settings whose order the parser does not
-//! name. [`FlashImage`] keeps them byte for byte, and no writer here touches
-//! them.
+//! The sensor, timing and lighting fields (`0x0a`, `0x4c`–`0x52`, `0xa0`–`0xe3`)
+//! decode into [`MouseSettings`] and are written by [`change_requests`]; the
+//! other fields are kept byte for byte and no writer here touches them.
 //!
 //! DPI is stored in 50-DPI steps minus one. Values above 12 800 DPI spill
 //! into the high-bits byte, whose bit layout is not recovered, so such a
 //! stage reads as an error rather than as a guess.
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use openlogi_core::hid::MouseSettings;
 use thiserror::Error;
+
+mod settings;
+
+pub use settings::change_requests;
 
 use super::{Opcode, PAYLOAD_LEN, Request, RequestError, Response, checksum};
 
@@ -42,7 +45,6 @@ const ACTIVE_STAGE: u16 = 0x04;
 const DPI_TABLE: u16 = 0x0c;
 const COLOR_TABLE: u16 = 0x2c;
 const BUTTON_TABLE: u16 = 0x60;
-const DEBOUNCE: u16 = 0xa9;
 const ENTRY_LEN: u16 = 4;
 const DPI_STEP: u16 = 50;
 const MAX_LOW_BYTE_DPI: u16 = 256 * DPI_STEP;
@@ -420,8 +422,8 @@ pub struct MouseConfig {
     pub active_stage: u8,
     /// The sixteen button bindings, in flash order.
     pub buttons: [ButtonAction; BUTTON_COUNT],
-    /// Button debounce in milliseconds.
-    pub debounce_ms: u8,
+    /// Sensor, timing and lighting settings.
+    pub settings: MouseSettings,
 }
 
 impl MouseConfig {
@@ -470,7 +472,7 @@ impl MouseConfig {
             stages,
             active_stage,
             buttons,
-            debounce_ms: single(bytes, DEBOUNCE)?,
+            settings: settings::parse(bytes),
         })
     }
 
@@ -508,12 +510,6 @@ fn stage(bytes: &[u8; FLASH_LEN], index: u16) -> Result<DpiStage, ConfigError> {
 #[must_use]
 pub fn set_report_rate(rate: ReportRate) -> Request {
     write_single(REPORT_RATE, rate.into())
-}
-
-/// Flash write setting the button debounce.
-#[must_use]
-pub fn set_debounce(milliseconds: u8) -> Request {
-    write_single(DEBOUNCE, milliseconds)
 }
 
 /// Flash write selecting the active stage of `config`'s stage list.

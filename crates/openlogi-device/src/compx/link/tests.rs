@@ -3,14 +3,19 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use hidpp::async_trait;
 use hidpp::channel::HidppChannel;
+use openlogi_core::color::Rgb;
 use openlogi_core::device::{BatteryLevel, BatteryStatus, StandaloneDevice};
 use openlogi_core::hid::dpi::Dpi;
 use openlogi_core::hid::report_rate::ReportRate;
-use openlogi_core::hid::{DeviceRoute, WriteError};
+use openlogi_core::hid::{
+    DeviceRoute, LiftOffDistance, MouseSettingsChange, OnboardDpiStage, OnboardDpiStages,
+    OnboardDpiStagesChange, WriteError,
+};
 
 use super::{
     CHECK_INTERVAL, KnownMouse, LAST_GOOD_GRACE, read_dpi_info, read_report_rate_info,
-    refresh_standalone, set_dpi, set_report_rate,
+    read_settings, read_stages, refresh_standalone, set_dpi, set_report_rate, set_settings,
+    set_stages,
 };
 use crate::backend::{
     BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawDuplex, RawWriter,
@@ -39,6 +44,7 @@ struct Mouse {
     attached: bool,
     pending: VecDeque<[u8; REPORT_LEN]>,
     requests: Vec<u8>,
+    written: Vec<usize>,
 }
 
 impl Mouse {
@@ -69,6 +75,7 @@ impl Mouse {
             }
             0x08 => reply[6..6 + length].copy_from_slice(&self.flash[address..address + length]),
             0x07 => {
+                self.written.push(address);
                 if self.behaviour != Behaviour::IgnoresWrites {
                     self.flash[address..address + length].copy_from_slice(&request[6..6 + length]);
                 }
@@ -99,6 +106,7 @@ impl MouseBackend {
                 attached: false,
                 pending: VecDeque::new(),
                 requests: Vec::new(),
+                written: Vec::new(),
             })),
         }
     }
@@ -197,7 +205,12 @@ async fn refresh_reports_battery_and_enables_measured_controls() {
     assert_eq!(battery.level, BatteryLevel::Low);
     assert_eq!(battery.status, BatteryStatus::Discharging);
     let capabilities = devices[0].capabilities.expect("capabilities");
-    assert!(capabilities.pointer && capabilities.report_rate);
+    assert!(
+        capabilities.pointer
+            && capabilities.report_rate
+            && capabilities.onboard_dpi_stages
+            && capabilities.mouse_settings
+    );
     assert_eq!(
         backend.with(|mouse| (mouse.attached, mouse.requests.last().copied())),
         (false, Some(0x02)),
@@ -432,5 +445,185 @@ async fn a_vanished_receiver_leaves_nothing_to_replay() {
         refresh_standalone(&backend, &mut none, &known)
             .await
             .is_empty()
+    );
+}
+
+fn stage(dpi: u16, r: u8, g: u8, b: u8) -> OnboardDpiStage {
+    OnboardDpiStage {
+        dpi: Dpi::new(dpi),
+        color: Rgb::new(r, g, b),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn stages_read_the_onboard_list_and_active_stage() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+
+    let stages = read_stages(&backend, &route()).await.expect("stages");
+
+    assert_eq!(
+        stages,
+        OnboardDpiStages {
+            stages: vec![
+                stage(800, 0xff, 0, 0),
+                stage(1000, 0, 0xff, 0),
+                stage(1200, 0xff, 0xff, 0),
+                stage(1400, 0, 0, 0xff),
+                stage(1600, 0xff, 0x80, 0),
+            ],
+            active: 3,
+            max_stages: 8,
+        }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_growing_list_stores_its_entries_before_the_count() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let mut stages = read_stages(&backend, &route())
+        .await
+        .expect("stages")
+        .stages;
+    stages.push(stage(3200, 0, 0xff, 0xff));
+    let change = OnboardDpiStagesChange { stages, active: 5 };
+
+    let applied = set_stages(&backend, &route(), &change)
+        .await
+        .expect("write");
+
+    assert_eq!(applied.stages, change.stages);
+    assert_eq!(applied.active, 5);
+    let written = backend.with(|mouse| mouse.written.clone());
+    assert_eq!(&written[written.len() - 2..], &[0x02, 0x04]);
+    assert!(written[..written.len() - 2].iter().all(|a| *a >= 0x0c));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shrinking_list_lowers_active_and_count_before_the_entries() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let change = OnboardDpiStagesChange {
+        stages: vec![stage(400, 1, 2, 3), stage(6400, 4, 5, 6)],
+        active: 1,
+    };
+
+    let applied = set_stages(&backend, &route(), &change)
+        .await
+        .expect("write");
+
+    assert_eq!(applied.stages, change.stages);
+    assert_eq!(applied.active, 1);
+    let written = backend.with(|mouse| mouse.written.clone());
+    assert_eq!(&written[..2], &[0x04, 0x02]);
+    assert!(written[2..].iter().all(|a| *a >= 0x0c));
+    assert_eq!(
+        read_dpi_info(&backend, &route()).await.map(|i| i.current),
+        Ok(Dpi::new(6400)),
+        "the active stage drives the DPI reading"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn invalid_stage_lists_are_refused_before_any_write() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let change = |stages, active| OnboardDpiStagesChange { stages, active };
+
+    assert_eq!(
+        set_stages(&backend, &route(), &change(vec![stage(825, 0, 0, 0)], 0)).await,
+        Err(WriteError::DpiUnsupported {
+            requested: Dpi::new(825)
+        })
+    );
+    assert!(matches!(
+        set_stages(&backend, &route(), &change(vec![], 0)).await,
+        Err(WriteError::RawDeviceProtocol(_))
+    ));
+    assert!(matches!(
+        set_stages(&backend, &route(), &change(vec![stage(800, 0, 0, 0); 9], 0)).await,
+        Err(WriteError::RawDeviceProtocol(_))
+    ));
+    assert!(matches!(
+        set_stages(&backend, &route(), &change(vec![stage(800, 0, 0, 0)], 1)).await,
+        Err(WriteError::RawDeviceProtocol(_))
+    ));
+    assert!(backend.with(|mouse| mouse.requests.is_empty()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn ignored_stage_writes_are_reported_as_not_applied() {
+    let backend = MouseBackend::new(Behaviour::IgnoresWrites);
+    let change = OnboardDpiStagesChange {
+        stages: vec![stage(800, 0, 0, 0)],
+        active: 0,
+    };
+
+    assert_eq!(
+        set_stages(&backend, &route(), &change).await,
+        Err(WriteError::OnboardDpiStagesNotApplied)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sleeping_mouse_cannot_read_or_set_stages() {
+    let backend = MouseBackend::new(Behaviour::Asleep);
+    let change = OnboardDpiStagesChange {
+        stages: vec![stage(800, 0, 0, 0)],
+        active: 0,
+    };
+
+    assert_eq!(
+        read_stages(&backend, &route()).await,
+        Err(WriteError::RawDeviceUnresponsive)
+    );
+    assert_eq!(
+        set_stages(&backend, &route(), &change).await,
+        Err(WriteError::RawDeviceUnresponsive)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn settings_are_read_from_the_flash() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+
+    let settings = read_settings(&backend, &route()).await.expect("settings");
+
+    assert_eq!(settings.lift_off, LiftOffDistance::Mm1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_setting_change_is_written_and_read_back() {
+    let backend = MouseBackend::new(Behaviour::Awake);
+    let change = MouseSettingsChange::LiftOff(LiftOffDistance::Mm2);
+
+    let applied = set_settings(&backend, &route(), &change)
+        .await
+        .expect("write");
+
+    assert_eq!(applied.lift_off, LiftOffDistance::Mm2);
+    assert_eq!(backend.with(|mouse| mouse.written.clone()), [0x0a]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ignored_setting_writes_are_reported_as_not_applied() {
+    let backend = MouseBackend::new(Behaviour::IgnoresWrites);
+    let change = MouseSettingsChange::LiftOff(LiftOffDistance::Mm2);
+
+    assert_eq!(
+        set_settings(&backend, &route(), &change).await,
+        Err(WriteError::MouseSettingNotApplied)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sleeping_mouse_cannot_read_or_set_settings() {
+    let backend = MouseBackend::new(Behaviour::Asleep);
+    let change = MouseSettingsChange::LiftOff(LiftOffDistance::Mm2);
+
+    assert_eq!(
+        read_settings(&backend, &route()).await,
+        Err(WriteError::RawDeviceUnresponsive)
+    );
+    assert_eq!(
+        set_settings(&backend, &route(), &change).await,
+        Err(WriteError::RawDeviceUnresponsive)
     );
 }

@@ -8,16 +8,22 @@
 
 use std::time::Duration;
 
+use openlogi_core::color::Rgb as WireRgb;
 use openlogi_core::device::{BatteryInfo, BatteryLevel, BatteryStatus, StandaloneDevice};
 use openlogi_core::hid::dpi::{Dpi as WireDpi, DpiCapabilities, DpiInfo};
 use openlogi_core::hid::report_rate::{ReportRate as WireReportRate, ReportRateInfo};
-use openlogi_core::hid::{DeviceRoute, WriteError};
+use openlogi_core::hid::{
+    DeviceRoute, MouseSettings, MouseSettingsChange, OnboardDpiStage, OnboardDpiStages,
+    OnboardDpiStagesChange, WriteError,
+};
 use openlogi_device_registry::compx::find_compx;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use super::config::{self, ConfigChangeError, Dpi, FlashImage, MouseConfig, ReportRate};
+use super::config::{
+    self, ConfigChangeError, Dpi, DpiStage, FlashImage, MouseConfig, ReportRate, Rgb,
+};
 use super::{Battery, PcDriver, REPORT_LEN, Request, Response, ResponseError, SerialNumber};
 use crate::backend::{HidBackend, NodeInfo, RawDuplex};
 use crate::channel::route::find_raw_route_node;
@@ -226,6 +232,119 @@ pub async fn set_dpi(
     .await
 }
 
+/// The DPI stages stored on the mouse, with the active one.
+///
+/// # Errors
+///
+/// [`WriteError`] when the mouse is unreachable or its flash is unreadable.
+pub async fn read_stages(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+) -> Result<OnboardDpiStages, WriteError> {
+    let config = with_link(backend, route, async |link| link.read_config().await).await?;
+    Ok(onboard_stages(&config))
+}
+
+/// Replace the DPI stages stored on the mouse and activate one, then read
+/// them back and return what the mouse reports.
+///
+/// The list is written so a session cut short never leaves the flash
+/// unreadable: a growing list stores its new entries before the count that
+/// reveals them, and a shrinking list lowers the active stage and the count
+/// before the entries.
+///
+/// # Errors
+///
+/// [`WriteError::DpiUnsupported`] for a DPI the flash cannot store,
+/// [`WriteError::RawDeviceProtocol`] for an empty or oversized list or an
+/// active stage outside it, and [`WriteError::OnboardDpiStagesNotApplied`]
+/// when the read-back disagrees.
+pub async fn set_stages(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+    change: &OnboardDpiStagesChange,
+) -> Result<OnboardDpiStages, WriteError> {
+    let stages = change
+        .stages
+        .iter()
+        .map(|stage| {
+            let dpi = Dpi::new(stage.dpi.into_inner()).ok_or(WriteError::DpiUnsupported {
+                requested: stage.dpi,
+            })?;
+            Ok(DpiStage {
+                x: dpi,
+                y: dpi,
+                color: device_color(stage.color),
+            })
+        })
+        .collect::<Result<Vec<_>, WriteError>>()?;
+    let mut writes = config::set_stages(&stages, change.active)?;
+    // The encoder leads with the count and active-stage writes, then the
+    // entry tables.
+    let entries = writes.split_off(2);
+    with_link(backend, route, async |link| {
+        let before = link.read_config().await?.stages.len();
+        let ordered: Vec<Request> = if stages.len() >= before {
+            entries.into_iter().chain(writes).collect()
+        } else {
+            writes.into_iter().rev().chain(entries).collect()
+        };
+        for request in &ordered {
+            link.transact(request).await?;
+        }
+        let actual = onboard_stages(&link.read_config().await?);
+        if actual.stages == change.stages && actual.active == change.active {
+            Ok(actual)
+        } else {
+            Err(WriteError::OnboardDpiStagesNotApplied)
+        }
+    })
+    .await
+}
+
+/// The sensor, timing and lighting settings stored on the mouse.
+///
+/// # Errors
+///
+/// [`WriteError`] when the mouse is unreachable or its flash is unreadable.
+pub async fn read_settings(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+) -> Result<MouseSettings, WriteError> {
+    let config = with_link(backend, route, async |link| link.read_config().await).await?;
+    Ok(config.settings)
+}
+
+/// Apply one change to the mouse's settings, then read them back and return
+/// what the mouse reports.
+///
+/// Every value in a [`MouseSettingsChange`] is in range by construction, so
+/// nothing is refused before the session opens.
+///
+/// # Errors
+///
+/// [`WriteError::MouseSettingNotApplied`] when the read-back does not show the
+/// change.
+pub async fn set_settings(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+    change: &MouseSettingsChange,
+) -> Result<MouseSettings, WriteError> {
+    let writes = config::change_requests(change)?;
+    with_link(backend, route, async |link| {
+        for request in &writes {
+            link.transact(request).await?;
+        }
+        let actual = link.read_config().await?.settings;
+        if actual.includes(change) {
+            Ok(actual)
+        } else {
+            Err(WriteError::MouseSettingNotApplied)
+        }
+    })
+    .await
+}
+
 /// The current polling rate and the rates offered on this link.
 ///
 /// # Errors
@@ -327,6 +446,8 @@ impl KnownMouse {
         let capabilities = device.capabilities.get_or_insert_default();
         capabilities.pointer = true;
         capabilities.report_rate = true;
+        capabilities.onboard_dpi_stages = true;
+        capabilities.mouse_settings = true;
     }
 }
 
@@ -400,6 +521,26 @@ fn dpi_info(config: &MouseConfig) -> Result<DpiInfo, WriteError> {
         current: WireDpi::new(config.current_stage().x.get()),
         capabilities: DpiCapabilities::new(config::storable_dpi().map(Dpi::get).collect())?,
     })
+}
+
+fn onboard_stages(config: &MouseConfig) -> OnboardDpiStages {
+    OnboardDpiStages {
+        stages: config
+            .stages
+            .iter()
+            .map(|stage| OnboardDpiStage {
+                dpi: WireDpi::new(stage.x.get()),
+                color: WireRgb::new(stage.color.r, stage.color.g, stage.color.b),
+            })
+            .collect(),
+        active: config.active_stage,
+        max_stages: u8::try_from(config::MAX_DPI_STAGES).unwrap_or(u8::MAX),
+    }
+}
+
+fn device_color(color: WireRgb) -> Rgb {
+    let (r, g, b) = color.components();
+    Rgb { r, g, b }
 }
 
 fn report_rate_info(current: ReportRate) -> ReportRateInfo {

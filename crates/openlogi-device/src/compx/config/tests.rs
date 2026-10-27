@@ -1,8 +1,14 @@
 use super::{
     ButtonAction, ConfigChangeError, ConfigError, Dpi, DpiAction, DpiStage, FLASH_LEN, FlashImage,
-    MouseButton, MouseConfig, ReportRate, Rgb, Scroll, set_active_stage, set_button, set_debounce,
-    set_report_rate, set_stages,
+    MouseButton, MouseConfig, ReportRate, Rgb, Scroll, change_requests, set_active_stage,
+    set_button, set_report_rate, set_stages,
 };
+use openlogi_core::color::Rgb as WireRgb;
+use openlogi_core::hid::{
+    AngleAdjustment, BodyLight, BodyLightMode, ButtonDebounce, DpiLed, DpiLedEffect, IdleTimeout,
+    Level, LiftOffDistance, MouseSettingsChange, SensorMode, SensorSwitch, WheelDebounce,
+};
+
 use crate::compx::{PAYLOAD_LEN, REPORT_LEN, Request, Response, checksum};
 
 // The configuration flash of a Zaopin mouse behind a 3554:f524 receiver.
@@ -91,7 +97,7 @@ fn hardware_dump_decodes_to_the_mouse_settings() {
     );
     assert_eq!(config.active_stage, 3);
     assert_eq!(config.current_stage().x.get(), 1400);
-    assert_eq!(config.debounce_ms, 8);
+    assert_eq!(config.settings.button_debounce.milliseconds(), 8);
     assert_eq!(
         config.buttons[..11],
         [
@@ -214,7 +220,13 @@ fn apply(flash: &mut [u8], request: &Request) {
 fn scalar_writes_round_trip_through_the_parser() {
     let mut flash = dump();
     apply(&mut flash, &set_report_rate(ReportRate::Hz4000));
-    apply(&mut flash, &set_debounce(4));
+    for request in change_requests(&MouseSettingsChange::ButtonDebounce(
+        ButtonDebounce::new(4).expect("in range"),
+    ))
+    .expect("framed")
+    {
+        apply(&mut flash, &request);
+    }
     let config = MouseConfig::parse(&image_of(&flash)).expect("valid");
     apply(
         &mut flash,
@@ -223,7 +235,7 @@ fn scalar_writes_round_trip_through_the_parser() {
 
     let config = MouseConfig::parse(&image_of(&flash)).expect("valid");
     assert_eq!(config.report_rate, ReportRate::Hz4000);
-    assert_eq!(config.debounce_ms, 4);
+    assert_eq!(config.settings.button_debounce.milliseconds(), 4);
     assert_eq!(config.active_stage, 0);
 }
 
@@ -281,4 +293,185 @@ fn invalid_changes_are_refused_before_framing() {
         set_button(16, ButtonAction::Disabled),
         Err(ConfigChangeError::ButtonOutOfRange(16))
     );
+}
+
+fn level(step: u8) -> Level {
+    Level::new(step).expect("level")
+}
+
+fn after(flash: &[u8], change: MouseSettingsChange) -> (Vec<u8>, MouseConfig) {
+    let mut flash = flash.to_vec();
+    for request in change_requests(&change).expect("framed") {
+        apply(&mut flash, &request);
+    }
+    let config = MouseConfig::parse(&image_of(&flash)).expect("valid");
+    (flash, config)
+}
+
+#[test]
+fn hardware_dump_decodes_to_the_sensor_timing_and_lighting_settings() {
+    let settings = MouseConfig::parse(&image_of(&dump()))
+        .expect("valid configuration")
+        .settings;
+
+    assert_eq!(settings.lift_off, LiftOffDistance::Mm1);
+    assert_eq!(settings.sensor_mode, SensorMode::HighPerformance);
+    assert!(settings.switches.is_on(SensorSwitch::MotionSync));
+    for off in [
+        SensorSwitch::AngleSnapping,
+        SensorSwitch::RippleControl,
+        SensorSwitch::HighestPerformance,
+        SensorSwitch::TwentyKFps,
+    ] {
+        assert!(!settings.switches.is_on(off), "{off:?}");
+    }
+    assert_eq!(settings.angle_adjustment, AngleAdjustment::ZERO);
+    assert_eq!(settings.idle_timeout, IdleTimeout::Minutes1);
+    assert_eq!(settings.button_debounce.milliseconds(), 8);
+    assert_eq!(settings.wheel_debounce, None);
+    assert_eq!(
+        settings.dpi_led,
+        DpiLed {
+            effect: DpiLedEffect::Breathing,
+            brightness: level(10),
+            speed: level(3),
+            enabled: false,
+        }
+    );
+    assert_eq!(
+        settings.body_light,
+        BodyLight {
+            mode: BodyLightMode::Rainbow,
+            color: WireRgb::new(0xff, 0, 0xff),
+            speed: level(8),
+            brightness: level(10),
+            enabled: false,
+            off_while_moving: false,
+        }
+    );
+}
+
+#[test]
+fn every_setting_change_round_trips_through_the_parser() {
+    let flash = dump();
+    let changes = [
+        MouseSettingsChange::LiftOff(LiftOffDistance::Mm0Point7),
+        MouseSettingsChange::LiftOff(LiftOffDistance::Mm2),
+        MouseSettingsChange::SensorMode(SensorMode::LowPower),
+        MouseSettingsChange::Switch {
+            switch: SensorSwitch::MotionSync,
+            on: false,
+        },
+        MouseSettingsChange::Switch {
+            switch: SensorSwitch::AngleSnapping,
+            on: true,
+        },
+        MouseSettingsChange::Switch {
+            switch: SensorSwitch::RippleControl,
+            on: true,
+        },
+        MouseSettingsChange::Switch {
+            switch: SensorSwitch::HighestPerformance,
+            on: true,
+        },
+        MouseSettingsChange::Switch {
+            switch: SensorSwitch::TwentyKFps,
+            on: true,
+        },
+        MouseSettingsChange::AngleAdjustment(AngleAdjustment::new(-30).expect("in range")),
+        MouseSettingsChange::AngleAdjustment(AngleAdjustment::new(17).expect("in range")),
+        MouseSettingsChange::ButtonDebounce(ButtonDebounce::new(0).expect("in range")),
+        MouseSettingsChange::WheelDebounce(WheelDebounce::new(60).expect("in range")),
+        MouseSettingsChange::DpiLed(DpiLed {
+            effect: DpiLedEffect::Steady,
+            brightness: level(1),
+            speed: level(10),
+            enabled: true,
+        }),
+        MouseSettingsChange::BodyLight(BodyLight {
+            mode: BodyLightMode::FixedColor,
+            color: WireRgb::new(1, 2, 3),
+            speed: level(1),
+            brightness: level(5),
+            enabled: true,
+            off_while_moving: true,
+        }),
+    ];
+    for change in changes {
+        let (_, config) = after(&flash, change);
+        let expected = MouseConfig::parse(&image_of(&flash))
+            .expect("valid")
+            .settings
+            .applying(&change);
+        assert_eq!(config.settings, expected, "{change:?}");
+        assert!(config.settings.includes(&change), "{change:?}");
+    }
+}
+
+#[test]
+fn idle_timeout_writes_both_copies_for_every_allowed_code() {
+    let codes = [1u8, 3, 6, 12, 18, 30, 60, 90, 180, 210, 240];
+    for (timeout, code) in IdleTimeout::ALL.into_iter().zip(codes) {
+        let (flash, config) = after(&dump(), MouseSettingsChange::IdleTimeout(timeout));
+        assert_eq!(config.settings.idle_timeout, timeout);
+        let pair = [code, 0x55u8.wrapping_sub(code)];
+        assert_eq!(&flash[0xad..0xaf], &pair);
+        assert_eq!(&flash[0xb7..0xb9], &pair);
+    }
+}
+
+#[test]
+fn angle_adjustment_is_signed_and_marked() {
+    let angle = AngleAdjustment::new(-5).expect("in range");
+    let (flash, config) = after(&dump(), MouseSettingsChange::AngleAdjustment(angle));
+
+    assert_eq!(&flash[0xbd..0xbf], &[0xfb, 0x5a]);
+    assert_eq!(&flash[0xbf..0xc1], &[0x01, 0x54]);
+    assert_eq!(config.settings.angle_adjustment, angle);
+}
+
+#[test]
+fn body_light_and_dpi_led_use_the_vendor_encodings() {
+    let light = BodyLight {
+        mode: BodyLightMode::Neon,
+        color: WireRgb::new(0x10, 0x20, 0x30),
+        speed: level(3),
+        brightness: level(6),
+        enabled: true,
+        off_while_moving: true,
+    };
+    let (flash, _) = after(&dump(), MouseSettingsChange::BodyLight(light));
+    assert_eq!(&flash[0xa0..0xa6], &[0x04, 0x10, 0x20, 0x30, 0x02, 0x05]);
+    assert_eq!(flash[0xa6], checksum(&flash[0xa0..0xa6]));
+    assert_eq!(&flash[0xa7..0xa9], &[0x01, 0x54]);
+    assert_eq!(&flash[0xb3..0xb5], &[0x01, 0x54]);
+
+    let led = DpiLed {
+        effect: DpiLedEffect::Steady,
+        brightness: level(5),
+        speed: level(7),
+        enabled: true,
+    };
+    let (flash, _) = after(&dump(), MouseSettingsChange::DpiLed(led));
+    assert_eq!(&flash[0x4c..0x4e], &[0x01, 0x54]);
+    assert_eq!(&flash[0x4e..0x50], &[0x80, 0xd5]);
+    assert_eq!(&flash[0x50..0x52], &[0x07, 0x4e]);
+    assert_eq!(&flash[0x52..0x54], &[0x01, 0x54]);
+}
+
+#[test]
+fn unwritten_or_unknown_settings_read_as_the_vendor_defaults() {
+    let mut flash = dump();
+    // Erase the lift-off distance and sensor mode, and store a lift-off code
+    // the vendor app never writes.
+    flash[0x0a] = 0xff;
+    flash[0x0b] = 0xff;
+    flash[0xb9] = 0x07;
+    flash[0xba] = 0x55 - 0x07;
+    let settings = MouseConfig::parse(&image_of(&flash))
+        .expect("an unwritten setting does not fail the read")
+        .settings;
+
+    assert_eq!(settings.lift_off, LiftOffDistance::Mm1);
+    assert_eq!(settings.sensor_mode, SensorMode::LowPower);
 }

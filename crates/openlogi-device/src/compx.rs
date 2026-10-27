@@ -45,8 +45,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use thiserror::Error;
 
 pub use self::link::{
-    KnownMouse, is_compx_route, read_dpi_info, read_report_rate_info, refresh_standalone, set_dpi,
-    set_report_rate,
+    KnownMouse, is_compx_route, read_dpi_info, read_report_rate_info, read_settings, read_stages,
+    refresh_standalone, set_dpi, set_report_rate, set_settings, set_stages,
 };
 
 /// Report id of every Compx request and response.
