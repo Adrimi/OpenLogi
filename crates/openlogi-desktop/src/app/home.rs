@@ -649,6 +649,16 @@ fn device_image(
     {
         return img(path).max_w_full().max_h_full().into_any_element();
     }
+    if let Some(known) = record
+        .codename
+        .as_deref()
+        .and_then(crate::services::known_devices::lookup)
+    {
+        return img(known.image)
+            .max_w_full()
+            .max_h_full()
+            .into_any_element();
+    }
     // Cameras carry no depot asset, so give them a recognisable glyph on their
     // gallery card instead of the generic chip fallback; mice get an original
     // illustration.

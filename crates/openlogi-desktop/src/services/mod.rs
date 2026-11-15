@@ -6,3 +6,4 @@ pub mod diagnostics;
 pub(crate) mod disable_keys_reads;
 pub mod i18n;
 pub mod ipc;
+pub mod known_devices;

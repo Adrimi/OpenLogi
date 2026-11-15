@@ -18,6 +18,7 @@ use tracing::debug;
 use super::device_key::DeviceKey;
 use super::device_session::ObservedConnection;
 use crate::services::assets::{AssetResolver, ResolvedAsset};
+use crate::services::known_devices;
 
 /// One paired device with everything the UI needs to switch to it in O(1):
 /// its settings and runtime identities, display name, resolved asset (PNG +
@@ -248,14 +249,8 @@ pub(super) fn build_device_list(
                     .map(PhysicalDeviceKey::into_string);
             let route_key = stable_id.route_key();
 
-            let display_name = asset
-                .as_ref()
-                .map(|a| a.display_name.clone())
-                .or_else(|| paired.codename.as_deref().map(prettify_codename))
-                .unwrap_or_else(|| {
-                    tr!("device.receiver_slot_number", number => paired.slot.to_string())
-                        .to_string()
-                });
+            let display_name =
+                paired_display_name(asset.as_ref(), paired.codename.as_deref(), paired.slot);
             let kind = effective_kind(paired.kind, asset.as_ref().and_then(|a| a.kind));
             list.push(DeviceRecord {
                 config_key,
@@ -937,6 +932,22 @@ pub(super) fn pick_initial_device(list: &[DeviceRecord], saved: Option<&str>) ->
                 .position(|record| record.is_persistent() && record.config_key == key)
         })
         .unwrap_or(0)
+}
+
+/// Name for a paired device: the curated asset name, else a recognised
+/// third-party model, else the tidied HID++ codename, else its slot.
+fn paired_display_name(asset: Option<&ResolvedAsset>, codename: Option<&str>, slot: u8) -> String {
+    asset
+        .map(|a| a.display_name.clone())
+        .or_else(|| {
+            codename
+                .and_then(known_devices::lookup)
+                .map(|known| known.name.to_string())
+        })
+        .or_else(|| codename.map(prettify_codename))
+        .unwrap_or_else(|| {
+            tr!("device.receiver_slot_number", number => slot.to_string()).to_string()
+        })
 }
 
 #[cfg(test)]
