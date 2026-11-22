@@ -57,12 +57,18 @@ impl ReceiverDescriptor {
 pub const RECEIVERS: &[ReceiverDescriptor] = &[
     ReceiverDescriptor::logitech(0xc52b, ReceiverBrand::Unifying, ReceiverProtocol::Unifying),
     ReceiverDescriptor::logitech(0xc532, ReceiverBrand::Unifying, ReceiverProtocol::Unifying),
+    // Pre-Unifying Nano receiver bundled with the MX Revolution, a HID++ 1.0
+    // mouse — cross-checked against Solaar's NANO_RECEIVER_C51A.
+    ReceiverDescriptor::logitech(0xc51a, ReceiverBrand::Nano, ReceiverProtocol::Unifying),
     // Nano receiver bundled with budget wireless combos (e.g. MK270, MK295),
     // limited to 2 paired devices — cross-checked against Solaar's
     // NANO_RECEIVER_C534.
     ReceiverDescriptor::logitech(0xc534, ReceiverBrand::Nano, ReceiverProtocol::Unifying),
     // Nano receiver bundled with the G602.
     ReceiverDescriptor::logitech(0xc537, ReceiverBrand::Nano, ReceiverProtocol::Unifying),
+    // Receiver bundled with the Spotlight presentation remote (WPID 0x405c),
+    // verified with a Spotlight; Projecteur drives it the same way.
+    ReceiverDescriptor::logitech(0xc53e, ReceiverBrand::Nano, ReceiverProtocol::Unifying),
     // Lightspeed gaming receiver used by the G502, G Pro Wireless, G604, and
     // other G-series devices.
     ReceiverDescriptor::logitech(
@@ -73,6 +79,14 @@ pub const RECEIVERS: &[ReceiverDescriptor] = &[
     // POWERPLAY wireless charging system's embedded Lightspeed receiver.
     ReceiverDescriptor::logitech(
         0xc53a,
+        ReceiverBrand::Lightspeed,
+        ReceiverProtocol::Unifying,
+    ),
+    // Lightspeed receiver bundled with the G613 keyboard (WPID 0x4065) —
+    // cross-checked against Solaar's LIGHTSPEED_RECEIVER_C53D, which drives
+    // it with that keyboard.
+    ReceiverDescriptor::logitech(
+        0xc53d,
         ReceiverBrand::Lightspeed,
         ReceiverProtocol::Unifying,
     ),
@@ -139,6 +153,14 @@ mod tests {
     }
 
     #[test]
+    fn g613_receiver_is_lightspeed_over_unifying_protocol() {
+        let receiver = find_receiver(LOGITECH_VENDOR_ID, 0xc53d).expect("c53d receiver");
+
+        assert_eq!(receiver.brand, ReceiverBrand::Lightspeed);
+        assert_eq!(receiver.protocol, ReceiverProtocol::Unifying);
+    }
+
+    #[test]
     fn g915_receiver_is_lightspeed_over_unifying_protocol() {
         let receiver = find_receiver(LOGITECH_VENDOR_ID, 0xc541).expect("c541 receiver");
 
@@ -155,8 +177,24 @@ mod tests {
     }
 
     #[test]
+    fn mx_revolution_nano_receiver_is_nano_over_unifying_protocol() {
+        let receiver = find_receiver(LOGITECH_VENDOR_ID, 0xc51a).expect("c51a receiver");
+
+        assert_eq!(receiver.brand, ReceiverBrand::Nano);
+        assert_eq!(receiver.protocol, ReceiverProtocol::Unifying);
+    }
+
+    #[test]
     fn mk270_mk295_nano_receiver_is_nano_over_unifying_protocol() {
         let receiver = find_receiver(LOGITECH_VENDOR_ID, 0xc534).expect("c534 receiver");
+
+        assert_eq!(receiver.brand, ReceiverBrand::Nano);
+        assert_eq!(receiver.protocol, ReceiverProtocol::Unifying);
+    }
+
+    #[test]
+    fn spotlight_receiver_is_nano_over_unifying_protocol() {
+        let receiver = find_receiver(LOGITECH_VENDOR_ID, 0xc53e).expect("c53e receiver");
 
         assert_eq!(receiver.brand, ReceiverBrand::Nano);
         assert_eq!(receiver.protocol, ReceiverProtocol::Unifying);

@@ -16,7 +16,7 @@ use openlogi_agent_core::event_monitor::EventMonitor;
 use openlogi_agent_core::observable::ObservableState;
 use openlogi_agent_core::orchestrator::{Orchestrator, SharedHandles};
 use openlogi_agent_core::runtime::scroll::{ScrollInputHandle, ScrollRuntime};
-use openlogi_agent_core::runtime::{ActionDispatcher, ActionRuntime};
+use openlogi_agent_core::runtime::{ActionDispatcher, ActionRequest, ActionRuntime};
 use openlogi_agent_core::watchers::shutdown::{StopOutcome, WatcherHandle};
 use openlogi_agent_core::watchers::{self, gesture::GestureOutputs};
 use openlogi_core::config::Config;
@@ -38,6 +38,9 @@ pub(crate) struct Core {
     pub(crate) inputs: InputServices,
     pub(crate) backlight_overlay: BacklightOverlayManager,
     pub(crate) ring_haptics: server::RingHapticPlayer,
+    /// The IPC server, whose device settings the menu-bar item changes too.
+    #[cfg(target_os = "macos")]
+    pub(crate) server: AgentServer,
     /// Client declarations forwarded by the IPC server — the dormancy gate's
     /// demand channel. It buffers, so a declaration that lands before the
     /// gate listens is not lost.
@@ -74,7 +77,7 @@ pub(crate) async fn bootstrap(config: Config) -> Option<Core> {
         Arc::clone(&observable),
     ));
 
-    let (ring_haptics, demand) = spawn_ipc_server(
+    let (server, demand) = spawn_ipc_server(
         Arc::clone(&orchestrator),
         &shared,
         Arc::clone(&observable),
@@ -90,7 +93,9 @@ pub(crate) async fn bootstrap(config: Config) -> Option<Core> {
         event_monitor,
         inputs,
         backlight_overlay,
-        ring_haptics,
+        ring_haptics: server.ring_haptics.clone(),
+        #[cfg(target_os = "macos")]
+        server,
         demand,
     })
 }
@@ -104,7 +109,7 @@ fn spawn_ipc_server(
     inputs: &InputServices,
     backlight_overlay: BacklightOverlayManager,
 ) -> (
-    server::RingHapticPlayer,
+    AgentServer,
     tokio::sync::mpsc::UnboundedReceiver<openlogi_ipc::ClientKind>,
 ) {
     let (server, demand) = AgentServer::new(
@@ -117,16 +122,15 @@ fn spawn_ipc_server(
         inputs.dispatcher.clone(),
         backlight_overlay,
     );
-    let ring_haptics = server.ring_haptics.clone();
-    tokio::spawn(server::run(server));
-    (ring_haptics, demand)
+    tokio::spawn(server::run(server.clone()));
+    (server, demand)
 }
 
 /// The input-action runtimes — pure in-process workers that touch no device
 /// until an action is dispatched, so [`bootstrap`] may start them.
 pub(crate) struct InputServices {
     pub(crate) ring: Arc<ActionRingManager>,
-    pub(crate) triggers: tokio::sync::mpsc::UnboundedReceiver<Option<String>>,
+    pub(crate) triggers: tokio::sync::mpsc::UnboundedReceiver<ActionRequest>,
     pub(crate) dispatcher: ActionDispatcher,
     action_runtime: ActionRuntime,
     pub(crate) scroll_input: ScrollInputHandle,
@@ -179,18 +183,20 @@ pub(crate) struct HidppWatcherHandles {
     gesture: WatcherHandle,
     host_switch: WatcherHandle,
     keyboard: WatcherHandle,
+    key_display: WatcherHandle,
 }
 
 impl HidppWatcherHandles {
     /// Stop all managers concurrently and confirm firmware teardown. The
     /// lifecycle retains this future and owns the terminal-exit deadline.
     pub(crate) async fn stop_and_wait(self) -> bool {
-        let (gesture, host_switch, keyboard) = tokio::join!(
+        let (gesture, host_switch, keyboard, key_display) = tokio::join!(
             self.gesture.stop_and_wait("gesture"),
             self.host_switch.stop_and_wait("host-switch"),
             self.keyboard.stop_and_wait("keyboard"),
+            self.key_display.stop_and_wait("key-display"),
         );
-        [gesture, host_switch, keyboard]
+        [gesture, host_switch, keyboard, key_display]
             .into_iter()
             .all(StopOutcome::is_stopped)
     }
@@ -212,20 +218,26 @@ pub(crate) fn spawn_hidpp_watchers(
     );
     let host_switch = watchers::host_switch::spawn(
         &shared.host_switch_links,
+        &shared.linked_host_switch,
         shared.channel_pool.clone(),
         shared.receiver_access.clone(),
         shared.channel_registry.clone(),
         shared.device_io.clone(),
     );
     let keyboard = watchers::keyboard::spawn(
-        &shared.keyboard_spec,
+        &shared.keyboard_specs,
         shared.keyboard_access(),
         inputs.dispatcher.clone(),
     );
+    // Keypad LCD tiles go through the keyboard session's channel, like
+    // Fn-lock: the keypad is the keyboard plane's device.
+    let key_display =
+        watchers::key_display::spawn(&shared.key_display_specs, shared.keyboard_access());
     HidppWatcherHandles {
         gesture,
         host_switch,
         keyboard,
+        key_display,
     }
 }
 

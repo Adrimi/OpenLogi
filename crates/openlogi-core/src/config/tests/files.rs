@@ -13,6 +13,19 @@ fn canonical_configuration_example_parses() {
     };
     assert_eq!(long_press.short(), &Action::ShowDesktop);
     assert_eq!(long_press.long(), &Action::MissionControl);
+    assert_eq!(
+        config
+            .momentum_scrolling("receiver:aabbccdd:slot:1")
+            .glide_ms,
+        600,
+        "the documented device override wins"
+    );
+    assert!(
+        config
+            .momentum_scrolling("receiver:aabbccdd:slot:2")
+            .enabled,
+        "a device without one follows the documented app-wide table"
+    );
 }
 
 #[test]
@@ -291,6 +304,40 @@ fn tracked_save_respects_the_writer_lock_and_releases_it_after_errors() {
         .open(&lock_path)
         .expect("sidecar remains");
     lock.try_lock().expect("neither save leaked its lock");
+}
+
+/// A save another writer is in the middle of is not a conflict: an edit
+/// waits for it to finish, where a bare tracked save gives up at once.
+#[test]
+fn an_edit_waits_out_another_writers_save() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.path().join("config.toml.lock"))
+        .expect("open lock");
+    lock.try_lock().expect("hold writer lock");
+    let mut edit = ConfigEdit::load(&path).expect("load");
+    edit.config_mut().set_selected_device(Some("mouse".into()));
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        drop(lock);
+    });
+
+    let revision = edit.commit().expect("the edit waits for the lock");
+    release.join().expect("release the lock");
+
+    let text = fs::read_to_string(&path).expect("read saved");
+    assert_eq!(revision, ConfigRevision::of(&text));
+    assert_eq!(
+        Config::load_from_path(&path)
+            .expect("reload")
+            .selected_device(),
+        Some("mouse")
+    );
 }
 
 #[test]

@@ -88,11 +88,12 @@ Things OpenLogi does that Options+ won't:
 - Logi Bolt and Unifying receivers, Bluetooth, and wired connections, with battery level and charge state
 - Low-battery notices at the bottom of the screen, once per discharge, with no OS notification permission
 - An on-screen indicator when a keyboard turns Caps Lock on or off, plus Num Lock and Scroll Lock on Windows and Linux
+- On macOS, a menu-bar menu that lists each device with its battery or light state, flags a missing permission, and changes the settings you reach for most without opening the app: DPI preset, wheel mode, Fn lock, backlight, disabled keys, headset sidetone, and a light's power, brightness, and color temperature. Hold ⌥ to see how each device connects
 
 <table>
     <tr>
         <td width="50%"><img src="https://assets.openlogi.org/screenshots/macos/light/cards/easy-switch.png" width="400" alt="Easy-Switch card listing three paired computers"></td>
-        <td width="50%"><b>Easy-Switch</b><ul><li>See which computer is paired on each channel, with its OS and connection</li><li>Rename a channel on devices that allow it</li></ul></td>
+        <td width="50%"><b>Easy-Switch</b><ul><li>See which computer is paired on each channel, with its OS and connection</li><li>Rename a channel on devices that allow it</li><li>Bind a button or Actions Ring slot to move the device to another channel</li></ul></td>
     </tr>
 </table>
 
@@ -148,6 +149,8 @@ Per-application profiles switch with the focused app. An `[apps]` alias lets one
 
 - Any Logitech UVC webcam (Brio, StreamCam, the C920 series, …), plug and play
 - Live preview that holds the camera only while you watch; leave it and the LED goes off
+- Pick the preview's resolution and frame rate from the modes your camera reports (this shapes OpenLogi's own preview, not what other apps get)
+- On macOS and Windows, a camera on a slower USB link than it supports (a USB 2 port, hub, or cable) is flagged, since it lists fewer resolutions and frame rates than it can deliver on USB 3
 - Zoom, pan, tilt, focus, exposure, white balance, and every other UVC control, written to the hardware so Meet, Zoom, and OBS see the change
 - Built-in Default / Streaming / Video call profiles plus your own snapshots, kept per camera
 
@@ -164,12 +167,14 @@ Feature coverage depends on what each device reports; the app shows only the con
 | Media keys | Native | Native | D-Bus MPRIS |
 | Window-manager actions (desktops, Mission Control, …) | Native | Native equivalents | GNOME, KDE (KWin), Hyprland; some macOS-only actions do nothing |
 | Menu-bar / tray icon | ✓ | ✓ | — |
+| Device controls in the menu-bar / tray menu | ✓ | — | — |
 | In-app updates | Sparkle | Built-in | Built-in |
 
 ## Install
 
 > [!IMPORTANT]
 > Quit **Logi Options+** (and Solaar on Linux) first. Only one application can own a receiver at a time.
+> On macOS, **Karabiner-Elements** also locks a Bluetooth keyboard that it modifies. Turn off **Modify events** for that keyboard in Karabiner-Elements → Settings → Devices.
 
 | Platform | System | Architecture |
 | --- | --- | --- |
@@ -242,10 +247,24 @@ See [DEVELOPMENT.md](docs/DEVELOPMENT.md), including [macOS input-hook safety](d
 
 ## Acknowledgments
 
-- **Windows, cameras, and i18n** by [@davidbudnick](https://github.com/davidbudnick) — keyboard RGB, Windows support, Logitech webcam support
-- **Linux port** by [@cserby](https://github.com/cserby) — Linux support
-- [Solaar](https://github.com/pwr-Solaar/Solaar) by [@pwr](https://github.com/pwr) — open-source HID++ implementation
-- [Mouser](https://github.com/TomBadash/Mouser) by [@TomBadash](https://github.com/TomBadash) — a local, account-free Options+ replacement
+### Contributors
+
+<a href="https://github.com/AprilNEA/OpenLogi/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=AprilNEA/OpenLogi" alt="Contributors">
+</a>
+
+Logo and app icon by [@kubai087](https://github.com/kubai087).
+
+### Credits
+
+- [Solaar](https://github.com/pwr-Solaar/Solaar) for documenting Logitech's HID++ protocol and device behavior in the open.
+- [Mouser](https://github.com/TomBadash/Mouser) by [@TomBadash](https://github.com/TomBadash) for inspiring a local, account-free take on Options+.
+
+### Infrastructure
+
+<a href="https://namespace.so/github-actions?utm_source=oss&utm_campaign=openlogi" target="_blank" rel="noopener noreferrer">
+    <img src="https://namespace.so/oss/badge.svg" alt="CI powered by Namespace" height="32">
+</a>
 
 ## License
 
@@ -256,16 +275,10 @@ The code in this repository is dual-licensed under either of
 
 at your option.
 
-### Third-party code
-
-`crates/openlogi-hidpp` is a vendored fork of [`hidpp`](https://crates.io/crates/hidpp)
-by [@lus](https://github.com/lus), licensed 0BSD.
-
 ### Logo & brand assets
 
-Thanks to [@kubai087](https://github.com/kubai087) for designing the OpenLogi
-logo. The OpenLogi logo and app icon (the brand assets under
-[`design/`](design/)) are © 2026 AprilNEA, all rights reserved, and are not covered by the MIT/Apache
+The OpenLogi logo and app icon (the brand assets under [`design/`](design/))
+are © 2026 AprilNEA, all rights reserved, and are not covered by the MIT/Apache
 licenses above; see [`design/LICENSE`](design/LICENSE). Forking the code grants
 no right to the OpenLogi name, logo, or icon; please don't use them to represent
 your own projects, forks, or distributions without prior written permission.

@@ -165,6 +165,34 @@ fn an_unanswered_header_frees_after_the_grace() {
     });
 }
 
+/// A request whose write fails is abandoned like one that timed out: the
+/// transport's error does not prove the report never reached the device, so
+/// its header stays reserved until a reply it may have provoked is discarded.
+#[test]
+fn a_failed_write_keeps_its_header_reserved_for_a_reply_it_may_have_provoked() {
+    futures::executor::block_on(async {
+        let (raw, handle) = MockRawHidChannel::new();
+        handle.fail_writes();
+        let channel = channel_with_reader(raw).await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener_events = Arc::clone(&events);
+        channel.add_msg_listener(move |msg, matched| {
+            listener_events.lock().unwrap().push((msg, matched));
+        });
+
+        let err = channel.send(short_msg(0x10), |_| true).await.unwrap_err();
+        assert!(matches!(err, ChannelError::Implementation(_)));
+        assert_pending_empty(&channel);
+        assert_eq!(stale_len(&channel), 1);
+
+        let provoked = short_msg(0x11);
+        handle.send_incoming(provoked).await;
+        wait_for_event_count(&events, 1).await;
+        assert_eq!(events.lock().unwrap()[0], (provoked, false));
+        assert_eq!(stale_len(&channel), 0);
+    });
+}
+
 /// Re-asking an abandoned request byte for byte gets no shortcut: the reply
 /// still owed to the first ask is discarded when it lands, and only then does
 /// the re-ask go out and get its own. The bytes say what was asked, not what
@@ -279,15 +307,17 @@ fn an_identical_re_ask_may_adopt_the_outstanding_reply_when_it_says_so() {
         handle.send_incoming(retry_reply).await;
         wait_for_event_count(&events, 2).await;
         assert_eq!(events.lock().unwrap()[1], (retry_reply, false));
+        // The reader discards the reply before it notifies listeners, so the
+        // header is already free here, well inside `STALE_REPLY_GRACE`.
+        assert_eq!(
+            stale_len(&channel),
+            0,
+            "the discarded reply kept the header"
+        );
         let other_reply = short_msg(0x13);
         handle.queue_response(other_reply);
-        for _ in 0..20 {
-            if handle.written_reports().len() == 3 {
-                break;
-            }
-            assert!(futures::poll!(other.as_mut()).is_pending());
-            futures_timer::Delay::new(Duration::from_millis(5)).await;
-        }
+        // Not polled for `Pending` first: one poll writes the request, and the
+        // reader can deliver the queued reply before that poll returns.
         assert_eq!(other.await.unwrap(), other_reply);
         assert_eq!(handle.written_reports().len(), 3);
         assert_pending_empty(&channel);

@@ -7,16 +7,26 @@
 //! carries. The positions are US ANSI ones, the layout an unidentified
 //! keyboard is translated with. The top row's keycodes stay with
 //! [`FunctionKey`], which owns them for every process.
+//!
+//! One usage reads in a single direction only: a Mac keyboard has no Print
+//! Screen key, and macOS reads a PC keyboard's Print Screen as F13, so
+//! [`hid_usage_to_macos`] presses F13 for it and F13 reads back as F13.
 
+use openlogi_core::binding::KeyboardUsage;
 use openlogi_core::config::FunctionKey;
 
 /// `Keyboard Escape`, the usage of [`FunctionKey::Esc`].
 const ESCAPE: u8 = 0x29;
 
+/// `Keyboard PrintScreen`, a key a Mac keyboard lacks.
+const PRINT_SCREEN: u8 = 0x46;
+
+/// `Keyboard F13`, the usage macOS reads [`PRINT_SCREEN`] as.
+const F13: u8 = 0x68;
+
 /// Every key outside the top row: `(HID usage, macOS virtual keycode)`.
 ///
-/// Besides the keys a [`KeyboardUsage`](openlogi_core::binding::KeyboardUsage)
-/// can name, it carries the rest of the keys a synthesized edge presses: the
+/// Besides the keys a [`KeyboardUsage`] can name, it carries the rest of the keys a synthesized edge presses: the
 /// ISO and JIS typing keys a keyboard layout can place a shortcut's character
 /// on, and the left modifiers a held chord holds.
 const KEYS: &[(u8, u16)] = &[
@@ -71,6 +81,7 @@ const KEYS: &[(u8, u16)] = &[
     (0x36, 0x2b), // ,
     (0x37, 0x2f), // .
     (0x38, 0x2c), // /
+    (0x49, 0x72), // Insert, which macOS names Help (kVK_Help)
     (0x4a, 0x73), // Home
     (0x4b, 0x74), // Page Up
     (0x4c, 0x75), // Forward Delete
@@ -80,6 +91,25 @@ const KEYS: &[(u8, u16)] = &[
     (0x50, 0x7b), // Left Arrow
     (0x51, 0x7d), // Down Arrow
     (0x52, 0x7e), // Up Arrow
+    // Keypad: the fixed `kVK_ANSI_Keypad*` codes of HIToolbox `Events.h`. A
+    // layout never moves them, so they bypass the layout lookup.
+    (0x54, 0x4b), // Keypad /
+    (0x55, 0x43), // Keypad *
+    (0x56, 0x4e), // Keypad -
+    (0x57, 0x45), // Keypad +
+    (0x58, 0x4c), // Keypad Enter
+    (0x59, 0x53), // Keypad 1
+    (0x5a, 0x54), // Keypad 2
+    (0x5b, 0x55), // Keypad 3
+    (0x5c, 0x56), // Keypad 4
+    (0x5d, 0x57), // Keypad 5
+    (0x5e, 0x58), // Keypad 6
+    (0x5f, 0x59), // Keypad 7
+    (0x60, 0x5b), // Keypad 8
+    (0x61, 0x5c), // Keypad 9
+    (0x62, 0x52), // Keypad 0
+    (0x63, 0x41), // Keypad .
+    (0x67, 0x51), // Keypad =
     (0x6f, 0x5a), // F20, one past the row `FunctionKey` covers
     (0x64, 0x0a), // ISO § (Non-US \ and |)
     (0x89, 0x5d), // JIS ¥ (International 3)
@@ -94,8 +124,25 @@ fn keys() -> impl Iterator<Item = (u8, u16)> {
     KEYS.iter().copied()
 }
 
+/// The usage macOS reads `usage` as: F13 for [`PRINT_SCREEN`], which has no
+/// key of its own on a Mac, and the usage itself for every other key.
+const fn read_by_macos(usage: u8) -> u8 {
+    match usage {
+        PRINT_SCREEN => F13,
+        other => other,
+    }
+}
+
+/// The usage of the key macOS presses for `usage`, so held chords count
+/// their owners by the key that goes down: Print Screen holds F13.
+pub(in crate::inject) fn pressed_usage(usage: KeyboardUsage) -> KeyboardUsage {
+    // `read_by_macos` returns `usage` itself or F13, both valid usages.
+    KeyboardUsage::try_new(read_by_macos(usage.code())).unwrap_or(usage)
+}
+
 /// The macOS virtual keycode of the key with HID usage `usage`.
 pub(super) fn hid_usage_to_macos(usage: u8) -> Option<u16> {
+    let usage = read_by_macos(usage);
     function_key(usage).map(FunctionKey::keycode).or_else(|| {
         keys()
             .find(|&(key_usage, _)| key_usage == usage)
@@ -144,7 +191,7 @@ mod tests {
     use openlogi_core::binding::KeyboardUsage;
     use openlogi_core::config::FunctionKey;
 
-    use super::{hid_usage_to_macos, keys, macos_to_hid_usage};
+    use super::{hid_usage_to_macos, keys, macos_to_hid_usage, pressed_usage, read_by_macos};
     use crate::inject::macos::keyboard_layout::typing_keys;
 
     #[test]
@@ -155,8 +202,24 @@ mod tests {
             }
             let vk = hid_usage_to_macos(code)
                 .unwrap_or_else(|| panic!("usage {code:#04x} has no macOS keycode"));
-            assert_eq!(macos_to_hid_usage(vk), Some(code), "usage {code:#04x}");
+            assert_eq!(
+                macos_to_hid_usage(vk),
+                Some(read_by_macos(code)),
+                "usage {code:#04x}"
+            );
         }
+    }
+
+    /// A shortcut naming Print Screen presses F13, the key macOS reads a PC
+    /// keyboard's Print Screen as; F13 still reads back as F13 (#1641).
+    #[test]
+    fn print_screen_presses_f13() {
+        assert_eq!(hid_usage_to_macos(0x46), Some(FunctionKey::F13.keycode()));
+        assert_eq!(macos_to_hid_usage(FunctionKey::F13.keycode()), Some(0x68));
+        let usage = |code| KeyboardUsage::try_new(code).expect("valid usage");
+        assert_eq!(pressed_usage(usage(0x46)), usage(0x68));
+        assert_eq!(pressed_usage(usage(0x68)), usage(0x68));
+        assert_eq!(pressed_usage(usage(0x04)), usage(0x04));
     }
 
     /// A key a layout can put a shortcut's character on must have a usage,
@@ -193,6 +256,16 @@ mod tests {
             assert!(usages.insert(usage), "usage {usage:#04x} listed twice");
             assert!(keycodes.insert(vk), "keycode {vk:#04x} listed twice");
         }
+    }
+
+    #[test]
+    fn keypad_usages_use_the_fixed_keypad_keycodes() {
+        assert_eq!(hid_usage_to_macos(0x56), Some(0x4e)); // kVK_ANSI_KeypadMinus
+        assert_eq!(hid_usage_to_macos(0x57), Some(0x45)); // kVK_ANSI_KeypadPlus
+        assert_eq!(hid_usage_to_macos(0x58), Some(0x4c)); // kVK_ANSI_KeypadEnter
+        assert_eq!(hid_usage_to_macos(0x62), Some(0x52)); // kVK_ANSI_Keypad0
+        assert_eq!(hid_usage_to_macos(0x61), Some(0x5c)); // kVK_ANSI_Keypad9
+        assert_eq!(hid_usage_to_macos(0x67), Some(0x51)); // kVK_ANSI_KeypadEquals
     }
 
     #[test]

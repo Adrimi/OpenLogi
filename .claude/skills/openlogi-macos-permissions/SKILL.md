@@ -19,7 +19,7 @@ list). Classify before doing anything else. The discriminator is one log line:
 |---|---|---|
 | `HID++ candidate interfaces count=0` | enumeration | **No.** The device's HID++ collection never matched — unsupported device, or not connected. |
 | `failed to open HID++ channel … Failed to open device: Input Monitoring is NOT granted to this process…` | open | **Yes.** The message classifies itself — grant Input Monitoring to the identity named in §2. |
-| `… Failed to open device: Input Monitoring is granted to this process — another app may hold the device exclusively, or macOS is serving a stale permission session (log out and back in)` | open | **The grant is fine.** Quit the other app (usually Logi Options+), or log out and back in. See §5. |
+| `… Failed to open device: Input Monitoring is granted to this process — another app may hold the device exclusively (quit Logi Options+; in Karabiner-Elements → Settings → Devices, turn off "Modify events" for this device), or macOS is serving a stale permission session (log out and back in)` | open | **The grant is fine.** Quit the other app (usually Logi Options+). For a Bluetooth-direct keyboard, also check Karabiner-Elements: it seizes every device it modifies, and the seize covers the HID++ collection on the same `IOHIDDevice`. Otherwise log out and back in. See §5. |
 | `opened HID++ channel` … then `Device::new failed` / `enumerate_features failed` with `Channel(Timeout)` or `report writer callback error: 0xE00002D6` | probe | **No.** The open succeeded, so investigate the probe/transport path, including the current status of upstream `sidit77/async-hid#45`. |
 
 All of these lines are `debug`-level except the open failure, which is a
@@ -58,9 +58,18 @@ Rules that drive most reports:
   app bundle. Bundles built before the rename spell that directory
   `OpenLogiAgent.app`; both are the same identity (`org.openlogi.agent`), and
   the grant survived the rename because the path is not part of the designated
-  requirement. The System Settings `+` picker will not browse into a bundle, so
-  they have to use Go-to-Folder. Say this explicitly; do not tell someone to
-  "grant OpenLogi permission".
+  requirement. Say this explicitly; do not tell someone to "grant OpenLogi
+  permission".
+- The System Settings `+` picker cannot browse into a bundle. To add the agent
+  to the Accessibility or Input Monitoring list, give the steps for the
+  reporter's release:
+  - After 0.9.0: click **Open** on that permission in OpenLogi's Settings →
+    Permissions, then drag **OpenLogi Agent** from the panel over System
+    Settings into the list. The panel appears unless the agent already reports
+    the grant, and it closes when the agent reports the grant.
+  - 0.9.0 and earlier, or when no panel appears: click `+`, press ⇧⌘G (Go to
+    Folder), enter `/Applications/OpenLogi.app/Contents/Library/LoginItems`,
+    and choose the agent bundle there.
 - A grant to the GUI does nothing for the agent, and vice versa. There is no
   bundle-wide grant.
 - **Every copy is its own identity.** A dev build (`org.openlogi.agent-dev`), a
@@ -185,7 +194,9 @@ Re-check linked upstream transport issues before attributing a probe timeout to 
 
 Say so plainly rather than promising a fix:
 
-- Apple's `+` picker not browsing into bundles.
+- Apple's `+` picker not browsing into bundles. The drag guide (§2) avoids the
+  picker only when the user starts from OpenLogi's **Open** button. A user who
+  opens System Settings another way still needs Go to Folder.
 - `IOHIDDeviceOpen`'s silent denial — we can only infer it by checking access
   separately.
 - A stale `tccd` decision that needs a full logout, or an MDM policy.

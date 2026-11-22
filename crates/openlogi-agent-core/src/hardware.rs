@@ -36,6 +36,7 @@ use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
 use crate::capture_plan::SharedCapturePlans;
+use crate::dpi::DpiBeforeShift;
 use crate::pointer_speed::SpeedTarget;
 use crate::receiver_access::ReceiverAccess;
 
@@ -53,7 +54,7 @@ pub(crate) use write_order::{WriteOrder, WriteTicket};
 /// own, so without this an asleep / unresponsive device would hang (and leak)
 /// this background thread forever; a write to a live device completes in well
 /// under a second.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Physical transport behind a route. Slots on one receiver share a HID writer,
 /// so they share one turnstile even though their device indices differ.
@@ -257,8 +258,16 @@ impl DeviceAccess {
         DeviceOp {
             access: self.clone(),
             route: route.clone(),
+            unit: None,
         }
     }
+}
+
+/// `unit` as a unit ID that tells a device from another one on its route:
+/// `None` for the all-zero ID of a device whose HID++ `0x0003` was never
+/// read, which names no device.
+pub(crate) fn known_unit(unit: [u8; 4]) -> Option<[u8; 4]> {
+    (unit != [0; 4]).then_some(unit)
 }
 
 /// One device's HID++ write or read, bound to the agent's capture and
@@ -270,6 +279,10 @@ impl DeviceAccess {
 pub struct DeviceOp {
     access: DeviceAccess,
     route: DeviceRoute,
+    /// The `0x0003` unit ID the device on the route must report for the op
+    /// to reach it (see [`Self::confirming`]); `None` reaches whichever
+    /// device is there.
+    unit: Option<[u8; 4]>,
 }
 
 /// Why a device operation has no channel to write through right now.
@@ -279,6 +292,9 @@ enum Unresolved {
     IoSuspended,
     /// Inventory publishes no channel for the route.
     NoChannel,
+    /// The op is bound to one device, which only a write's own preflight
+    /// confirms (see [`DeviceOp::confirming`]).
+    Unconfirmed,
 }
 
 impl fmt::Display for Unresolved {
@@ -286,6 +302,7 @@ impl fmt::Display for Unresolved {
         f.write_str(match self {
             Self::IoSuspended => "host device I/O suspended",
             Self::NoChannel => "no inventory channel",
+            Self::Unconfirmed => "the device on the route is not confirmed",
         })
     }
 }
@@ -298,11 +315,33 @@ impl From<Unresolved> for WriteError {
 }
 
 impl DeviceOp {
+    /// Reach only the device on the route that reports `unit` through HID++
+    /// `0x0003`, as `None` reaches any. [`Self::run`], [`Self::run_in_turn`],
+    /// [`Self::run_in_order`] and the manual Disable Keys write read the unit
+    /// ID on the channel they write through, after they hold the receiver
+    /// lease, and refuse another device with [`WriteError::DeviceNotFound`]:
+    /// a device paired into a receiver slot after a change was asked for
+    /// the one that left it never takes that change. Every other write
+    /// cannot confirm the device and refuses a bound op the same way.
+    pub(crate) fn confirming(self, unit: Option<[u8; 4]>) -> Self {
+        Self { unit, ..self }
+    }
+
     /// Resolve the authoritative channel without acquiring the receiver
     /// lease. Callers that manage their own lease/thread lifecycle across
     /// more than one write (the volatile-settings reapply sequence) resolve
     /// once up front through this instead of [`Self::run`]/[`Self::detach`].
+    /// An op bound to one device does not resolve: only [`Self::reach`]
+    /// confirms that device.
     fn resolve(&self) -> Result<SharedChannel, Unresolved> {
+        if self.unit.is_some() {
+            return Err(Unresolved::Unconfirmed);
+        }
+        self.route_channel()
+    }
+
+    /// [`Self::resolve`] for any device on the route.
+    fn route_channel(&self) -> Result<SharedChannel, Unresolved> {
         if !self.access.device_io.allows_io() {
             return Err(Unresolved::IoSuspended);
         }
@@ -312,6 +351,21 @@ impl DeviceOp {
             &self.route,
         )
         .map_err(|_| Unresolved::NoChannel)
+    }
+
+    /// Resolve the channel for `operation`, held under the receiver lease,
+    /// and for an op bound to one device confirm that device is the one on
+    /// it.
+    async fn reach(&self, operation: HidppOperation) -> Result<SharedChannel, WriteError> {
+        let shared = self.route_channel()?;
+        if let Some(unit) = self.unit {
+            let found = openlogi_hid::get_unit_id_on(&shared, operation).await?;
+            if found != Some(unit) {
+                debug!(route = %self.route, ?operation, "another device answers on the route; not writing");
+                return Err(WriteError::DeviceNotFound);
+            }
+        }
+        Ok(shared)
     }
 
     /// Lease the receiver, wait for this transport's HID turn, resolve the
@@ -341,8 +395,7 @@ impl DeviceOp {
         let turn = self.access.transport_turns.turn_for(&self.route);
         let _lease = self.access.receiver_access.acquire_for_io().await;
         after_transport_turn(&turn, async {
-            let shared = self.resolve()?;
-            timed(op, f(shared)).await
+            timed(op, async { f(self.reach(op).await?).await }).await
         })
         .await
     }
@@ -377,8 +430,8 @@ impl DeviceOp {
         within_turn(
             ticket,
             &turn,
-            || async { write(self.resolve()?).await },
-            || async { superseded(self.resolve()?).await },
+            || async { write(self.reach(op).await?).await },
+            || async { superseded(self.reach(op).await?).await },
         )
         .await
         .map_err(|_| WriteError::RequestTimedOut { operation: op })?
@@ -411,8 +464,7 @@ impl DeviceOp {
             .in_order(|| async {
                 let _lease = self.access.receiver_access.acquire_for_io().await;
                 after_transport_turn(&turn, async {
-                    let shared = self.resolve()?;
-                    timed(op, write(shared)).await
+                    timed(op, async { write(self.reach(op).await?).await }).await
                 })
                 .await
             })
@@ -648,6 +700,12 @@ fn log_outcome<T>(
     }
 }
 
+/// Whether a bounded background write was rejected or timed out, so its
+/// device may not hold what it asked for.
+fn write_failed<T>(result: &Result<Result<T, WriteError>, Elapsed>) -> bool {
+    matches!(result, Ok(Err(_)) | Err(_))
+}
+
 /// Wait for `ticket`'s turn, then for `transport`, then give whichever of
 /// `write` and `superseded` runs the whole `WRITE_TIMEOUT`. Every ordered
 /// write goes through here: neither wait is part of the deadline, and the
@@ -719,6 +777,48 @@ pub fn step_backlight_in_background(op: DeviceOp, step: BacklightStep) {
                     level = state.current_level,
                     "keyboard backlight stepped"
                 );
+            });
+        },
+    );
+}
+
+/// Move `op`'s device to Easy-Switch `slot` in the background via
+/// [`openlogi_hid::switch_host_on_unit`], in the order of `ticket` and
+/// skipping none: a device that leaves this computer on the first switch must
+/// not have a later request land before it. Returns immediately.
+///
+/// The write is refused when the route's device no longer reports `unit_id`,
+/// so a receiver slot re-paired while the request waited is not switched. A
+/// device without `0x1814`, an empty slot, or another device is logged and
+/// left where it is.
+pub(crate) fn switch_host_in_background(
+    op: DeviceOp,
+    ticket: WriteTicket,
+    slot: u8,
+    unit_id: [u8; 4],
+) {
+    let index = op.route.device_index();
+    let turn = op.access.transport_turns.turn_for(&op.route);
+    op.spawn_timed_write_in_order(
+        "Easy-Switch host switch",
+        ticket,
+        move |op| async move {
+            after_transport_turn(&turn, async {
+                tokio::time::timeout(WRITE_TIMEOUT, async {
+                    let shared = op.resolve()?;
+                    Ok(openlogi_hid::switch_host_on_unit(&shared, slot, unit_id).await?)
+                })
+                .await
+            })
+            .await
+        },
+        move |result| {
+            log_outcome(index, "Easy-Switch host switch", result, |sent| {
+                if sent {
+                    info!(index, slot, "Easy-Switch host switch sent");
+                } else {
+                    debug!(index, slot, "device already on the channel — nothing sent");
+                }
             });
         },
     );
@@ -816,12 +916,17 @@ pub(crate) fn write_force_sensing_in_background(op: DeviceOp, ticket: WriteTicke
 /// When `led` is set, the same turn then lights (`true`) or darkens the DPI
 /// LED with [`show_precision_led`]. The LED never fails the speed write: it
 /// gives up before the turn's timeout would.
+///
+/// `on_failed` runs when the mouse rejected the write or it timed out, so the
+/// mouse may not have the target; not when a newer write superseded it.
 pub(crate) fn write_pointer_speed_in_background(
     op: DeviceOp,
     ticket: WriteTicket,
     target: SpeedTarget,
     led: Option<bool>,
+    before: Option<DpiBeforeShift>,
     on_applied: impl FnOnce() + Send + 'static,
+    on_failed: impl FnOnce() + Send + 'static,
 ) {
     let index = op.route.device_index();
     let turn = op.access.transport_turns.turn_for(&op.route);
@@ -834,6 +939,11 @@ pub(crate) fn write_pointer_speed_in_background(
                 || async {
                     let started = tokio::time::Instant::now();
                     let shared = op.resolve()?;
+                    if let Some(before) = before
+                        && before.get().is_none()
+                    {
+                        before.set(openlogi_hid::get_dpi_info_on(&shared).await?.current);
+                    }
                     let landed = match target {
                         SpeedTarget::Scaled(speed) => openlogi_hid::set_pointer_speed_on(&shared, speed)
                             .await
@@ -852,6 +962,7 @@ pub(crate) fn write_pointer_speed_in_background(
             .await
         },
         move |result| {
+            let failed = write_failed(&result);
             log_outcome(index, "pointer-speed write", result, |landed| match landed {
                 Some(Landed::Speed(applied)) => {
                     debug!(index, ?target, %applied, "pointer speed written");
@@ -872,6 +983,9 @@ pub(crate) fn write_pointer_speed_in_background(
                 }
                 None => debug!(index, ?target, "pointer-speed write superseded by a newer one"),
             });
+            if failed {
+                on_failed();
+            }
         },
     );
 }
@@ -1238,7 +1352,11 @@ pub(crate) fn reapply_mouse_volatile_in_background(
                 );
                 return;
             }
-            let op = DeviceOp { access, route };
+            let op = DeviceOp {
+                access,
+                route,
+                unit: None,
+            };
             let turn = op.access.transport_turns.turn_for(&op.route);
             if let Some(change) = wheel {
                 let (plans, route) = (&capture_plans, &op.route);
@@ -1377,6 +1495,130 @@ fn log_wheel_result(
     log_outcome(index, "wheel mode write", result, |_written| {
         debug!(index, ?change, "native wheel mode written");
     });
+}
+
+/// Write the DPI `restore` yields once this write's turn comes, if any, and
+/// forget `before` once it is written. As a pointer-speed write does, it then
+/// sets the DPI LED when `led` says, runs `on_restored` once it landed, and
+/// `on_failed` when the mouse rejected it or the write timed out.
+pub(crate) fn restore_dpi_in_background(
+    op: DeviceOp,
+    ticket: WriteTicket,
+    before: DpiBeforeShift,
+    led: Option<bool>,
+    restore: impl FnOnce() -> Option<Dpi> + Send + 'static,
+    on_restored: impl FnOnce() + Send + 'static,
+    on_failed: impl FnOnce() + Send + 'static,
+) {
+    let index = op.route.device_index();
+    let turn = op.access.transport_turns.turn_for(&op.route);
+    op.spawn_timed_write(
+        "DPI restore",
+        move |op| async move {
+            within_turn(
+                &ticket,
+                &turn,
+                || async move {
+                    let Some(dpi) = restore() else {
+                        return Ok(Some(None));
+                    };
+                    let started = tokio::time::Instant::now();
+                    let shared = op.resolve()?;
+                    openlogi_hid::set_dpi_on(&shared, dpi).await?;
+                    if let Some(on) = led {
+                        show_precision_led(&shared, on, started).await;
+                    }
+                    before.clear();
+                    Ok(Some(Some(dpi)))
+                },
+                || async { Ok(None) },
+            )
+            .await
+        },
+        move |result| {
+            let failed = write_failed(&result);
+            log_outcome(index, "DPI restore", result, |restored| match restored {
+                Some(Some(dpi)) => {
+                    debug!(index, %dpi, "DPI restored");
+                    on_restored();
+                }
+                Some(None) => debug!(index, "no DPI to restore"),
+                None => debug!(index, "DPI restore superseded by a newer write"),
+            });
+            if failed {
+                on_failed();
+            }
+        },
+    );
+}
+
+/// Read the DPI of `op`'s mouse once this write's turn comes, and write the
+/// DPI `step` picks from that reading, unless a newer pointer-speed write was
+/// requested after `ticket`, before or during the read. For a preset step on
+/// a mouse whose DPI OpenLogi never set. As a pointer-speed write does, it
+/// then sets the DPI LED when `led` says, and runs `on_applied` once it
+/// landed. `on_failed` gets the DPI `step` picked when the mouse rejected it
+/// or the write timed out.
+pub(crate) fn step_dpi_in_background(
+    op: DeviceOp,
+    ticket: WriteTicket,
+    led: Option<bool>,
+    step: impl FnOnce(Dpi) -> Option<Dpi> + Send + 'static,
+    on_applied: impl FnOnce() + Send + 'static,
+    on_failed: impl FnOnce(Dpi) + Send + 'static,
+) {
+    let index = op.route.device_index();
+    let turn = op.access.transport_turns.turn_for(&op.route);
+    let picked = Arc::new(Mutex::new(None));
+    let picked_by_step = Arc::clone(&picked);
+    op.spawn_timed_write(
+        "DPI step",
+        move |op| async move {
+            let recheck = ticket.clone();
+            within_turn(
+                &ticket,
+                &turn,
+                || async move {
+                    let started = tokio::time::Instant::now();
+                    let shared = op.resolve()?;
+                    let reading = openlogi_hid::get_dpi_info_on(&shared).await?.current;
+                    // A write requested during the read holds the newer DPI;
+                    // `step` must not overwrite what it cached.
+                    if !recheck.is_current() {
+                        return Ok(None);
+                    }
+                    let Some(dpi) = step(reading) else {
+                        return Ok(Some(None));
+                    };
+                    *picked_by_step
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(dpi);
+                    openlogi_hid::set_dpi_on(&shared, dpi).await?;
+                    if let Some(on) = led {
+                        show_precision_led(&shared, on, started).await;
+                    }
+                    Ok(Some(Some((reading, dpi))))
+                },
+                || async { Ok(None) },
+            )
+            .await
+        },
+        move |result| {
+            let failed = write_failed(&result);
+            log_outcome(index, "DPI step", result, |stepped| match stepped {
+                Some(Some((reading, dpi))) => {
+                    debug!(index, %reading, %dpi, "DPI stepped from the mouse's reading");
+                    on_applied();
+                }
+                Some(None) => debug!(index, "no DPI preset to step to"),
+                None => debug!(index, "DPI step superseded by a newer write"),
+            });
+            let picked = *picked.lock().unwrap_or_else(PoisonError::into_inner);
+            if failed && let Some(dpi) = picked {
+                on_failed(dpi);
+            }
+        },
+    );
 }
 
 /// Spawn an OS thread that reconciles the configured native HiResWheel mode
@@ -2066,10 +2308,15 @@ mod tests {
     fn wheel_publication(route: &DeviceRoute, divert: bool) -> Arc<CapturePublication> {
         let mut plan = crate::capture_plan::plan_for_device(
             &openlogi_core::config::Config::default(),
-            openlogi_core::device_order::PhysicalDeviceKey::parse("unit:00000001")
+            crate::capture_plan::PlanDevice {
+                physical_key: openlogi_core::device_order::PhysicalDeviceKey::parse(
+                    "unit:00000001",
+                )
                 .expect("fixture is a physical key"),
-            "mouse",
-            route.clone(),
+                config_key: "mouse",
+                route: route.clone(),
+                layout: None,
+            },
             None,
             0,
             true,

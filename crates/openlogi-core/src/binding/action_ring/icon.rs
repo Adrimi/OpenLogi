@@ -86,8 +86,6 @@ pub enum ActionRingIcon {
     VolumeDown,
     /// Muted-volume glyph.
     Mute,
-    /// Muted-microphone glyph.
-    MicOff,
     /// Horizontal scroll-left glyph.
     ScrollLeft,
     /// Horizontal scroll-right glyph.
@@ -118,6 +116,14 @@ pub enum ActionRingIcon {
     Book,
     /// Prohibited action glyph.
     Ban,
+    /// Easy-Switch channel 1 glyph.
+    Channel1,
+    /// Easy-Switch channel 2 glyph.
+    Channel2,
+    /// Easy-Switch channel 3 glyph.
+    Channel3,
+    /// Muted-microphone glyph. Appended last: variant order is wire format.
+    MicOff,
 }
 
 impl ActionRingIcon {
@@ -183,11 +189,14 @@ impl ActionRingIcon {
             Self::Palette => "action-icons/palette.svg",
             Self::Book => "action-icons/book-open.svg",
             Self::Ban => "action-icons/ban.svg",
+            Self::Channel1 => "action-icons/square-1.svg",
+            Self::Channel2 => "action-icons/square-2.svg",
+            Self::Channel3 => "action-icons/square-3.svg",
         }
     }
 
     /// Every icon offered by the Actions Ring editor.
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 58] = [
         Self::Pointer,
         Self::Mouse,
         Self::Copy,
@@ -243,6 +252,9 @@ impl ActionRingIcon {
         Self::Palette,
         Self::Book,
         Self::Ban,
+        Self::Channel1,
+        Self::Channel2,
+        Self::Channel3,
     ];
 
     /// Stable catalog key used as this icon's accessible label.
@@ -302,6 +314,9 @@ impl ActionRingIcon {
             Self::Palette => "action_ring.palette",
             Self::Book => "action_ring.book",
             Self::Ban => "pointer.do_nothing",
+            Self::Channel1 => "actions.easy_switch_channel_1",
+            Self::Channel2 => "actions.easy_switch_channel_2",
+            Self::Channel3 => "actions.easy_switch_channel_3",
         }
     }
 }
@@ -323,7 +338,8 @@ macro_rules! derive_action_icon {
                     | Action::TypeText(_)
                     | Action::Workflow(_)
                     | Action::HoldShortcut(_)
-                    | Action::TapKeyHoldingModifiers(_) => Self::Keyboard,
+                    | Action::TapKeyHoldingModifiers(_)
+                    | Action::HoldModifier(_) => Self::Keyboard,
                     Action::RunAppleScript(_) | Action::RunShellCommand(_) => Self::Terminal,
                     Action::OpenApplication(_) => Self::Applications,
                 }

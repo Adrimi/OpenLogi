@@ -1,8 +1,11 @@
 //! Testable state and timing for the macOS HID tap safety watchdogs.
 
+use std::panic::Location;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use tracing::error;
 
 pub(super) const CALLBACK_STUCK_BUDGET: Duration = Duration::from_millis(200);
 /// How often the callback watchdog polls.
@@ -12,7 +15,7 @@ pub(super) const CALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// leaves the lifecycle watchdog unscheduled leaves this thread unscheduled
 /// too, and a callback that was entered when it began is not stuck for having
 /// been frozen with the rest of the process. Every other gap is charged in
-/// full.
+/// full; [`CallbackWatchdog`] documents which epoch read a gap is judged by.
 pub(super) const CALLBACK_OBSERVATION_GAP: Duration = CALLBACK_POLL_INTERVAL.saturating_mul(5);
 pub(super) const TAP_SHUTDOWN_BUDGET: Duration = Duration::from_millis(1_500);
 /// How long the tap thread may stay inside one between-slice capability probe
@@ -64,22 +67,83 @@ pub(super) enum TapPhase {
 }
 
 impl TapPhase {
-    const fn decode(value: u8) -> Self {
-        if value > Self::ThreadExited as u8 {
-            // An unknown byte cannot prove that the HID tap was destroyed.
-            // Treat it as hazardous so both watchdogs remain armed and the
-            // lifecycle timeout can fail safe instead of panicking or disarming.
-            return Self::Armed;
-        }
-        match value {
-            0 => Self::Starting,
-            1 => Self::Arming,
-            2 => Self::Armed,
-            3 => Self::Probing,
-            4 => Self::TapStopped,
-            _ => Self::ThreadExited,
+    /// The phase `byte` encodes, or `None` for a byte no phase encodes. Every
+    /// byte has its own arm, so no byte falls through to a phase it does not
+    /// encode.
+    const fn decode(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Starting),
+            1 => Some(Self::Arming),
+            2 => Some(Self::Armed),
+            3 => Some(Self::Probing),
+            4 => Some(Self::TapStopped),
+            5 => Some(Self::ThreadExited),
+            6..=u8::MAX => None,
         }
     }
+
+    /// Whether a HID tap may be installed while the tap thread is judged by
+    /// its progress mark: creating or activating the tap, servicing it, or
+    /// probing between slices.
+    const fn judged_by_progress(self) -> bool {
+        matches!(self, Self::Arming | Self::Armed | Self::Probing)
+    }
+}
+
+/// A step the hook publishes in the tap lifecycle. Each compare-and-swaps
+/// from the phases it may follow ([`Self::edge`]), so a step out of order is
+/// refused instead of overwriting the phase both watchdogs rely on.
+///
+/// The thread-exit edge is not one of these: only [`TapThreadExitGuard`]
+/// publishes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Transition {
+    /// The tap thread is about to enter CoreGraphics, which may install the
+    /// HID tap before it returns.
+    BeginArming,
+    /// The tap is enabled: first after creation, then again after each probe.
+    Arm,
+    /// The run-loop slice returned, and the thread enters the between-slice
+    /// capability probe.
+    EnterProbing,
+    /// The slice loop ended, on either side of a probe. Publishing `Armed`
+    /// again gives the teardown the short budget — also after a revoked grant
+    /// or a spent re-arm budget, which leave the loop in `Probing`.
+    BeginTeardown,
+    /// The tap was disabled and destroyed on its own thread.
+    TapDestroyed,
+    /// The tap thread was never spawned, so no tap can exist.
+    SpawnFailed,
+}
+
+impl Transition {
+    /// The phases this step may follow, and the phase it publishes.
+    const fn edge(self) -> (&'static [TapPhase], TapPhase) {
+        match self {
+            Self::BeginArming => (&[TapPhase::Starting], TapPhase::Arming),
+            Self::Arm => (&[TapPhase::Arming, TapPhase::Probing], TapPhase::Armed),
+            Self::EnterProbing => (&[TapPhase::Armed], TapPhase::Probing),
+            Self::BeginTeardown => (&[TapPhase::Armed, TapPhase::Probing], TapPhase::Armed),
+            Self::TapDestroyed => (&[TapPhase::Armed], TapPhase::TapStopped),
+            Self::SpawnFailed => (&[TapPhase::Starting], TapPhase::ThreadExited),
+        }
+    }
+}
+
+/// The phases the tap thread may exit from: every one but `ThreadExited`.
+const THREAD_EXIT_FROM: &[TapPhase] = &[
+    TapPhase::Starting,
+    TapPhase::Arming,
+    TapPhase::Armed,
+    TapPhase::Probing,
+    TapPhase::TapStopped,
+];
+
+/// What a refused step found in the phase cell: a phase the step may not
+/// follow, or (`None`) a byte no phase encodes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OutOfOrder {
+    found: Option<TapPhase>,
 }
 
 /// Whether the tap callback is idle or the monotonic millisecond when it entered.
@@ -109,10 +173,36 @@ impl CallbackActivity {
     }
 }
 
-/// Atomics shared by the tap, stopper, and watchdog threads.
+/// The tap thread's lifecycle, shared lock-free by the tap, stopper, and
+/// watchdog threads: the one owner of the phase encoding and of every write
+/// to it.
 ///
-/// A stop request is a separate latch from `phase`: it must never imply that
-/// the active HID tap has actually been detached.
+/// The phase moves only by [`Self::publish`] and the thread-exit guard, each
+/// a compare-and-swap from the phases the step may follow: `Starting →
+/// Arming → Armed ⇄ Probing → Armed → TapStopped → ThreadExited`, plus
+/// `Starting → ThreadExited` when the thread was never spawned, and
+/// `ThreadExited` from any phase when the thread returns early or unwinds.
+/// That last edge is sound because the guard drops after every other
+/// tap-thread local, the `CGEventTap` among them, whose `Drop` invalidates
+/// the tap's Mach port: an exited thread has no tap left installed. A step
+/// out of order is refused and logged, and the phase keeps its value.
+///
+/// Two latches sit beside the phase rather than inside it. Each has its own
+/// single writer and neither moves the phase; packing them into the phase
+/// byte would make every tap-thread step retry against another thread's
+/// write, and no decision reads them together with it:
+///
+/// - The stop latch belongs to the stopper. It never implies that the active
+///   HID tap was detached: while it is set, only `ThreadExited` completes the
+///   lifecycle watch. `HookInner` exists only after the first
+///   [`Transition::Arm`], so a stop lands in `Armed` or later. A stop in
+///   `Starting` or `Arming` cannot happen, and would still be well defined:
+///   the lifecycle watchdog ignores it until arming begins, then times it
+///   like any other.
+/// - The OS-disabled latch belongs to the tap callback. CoreGraphics runs the
+///   callback only inside a run-loop slice, on the tap thread under `Armed`,
+///   and the slice loop consumes the latch under `Probing` on the same
+///   thread. No watchdog reads it.
 #[derive(Debug)]
 pub(super) struct WatchdogSignals {
     // `Instant` uses CLOCK_UPTIME_RAW on macOS: monotonic, and paused while
@@ -121,8 +211,10 @@ pub(super) struct WatchdogSignals {
     // is why the lifecycle watchdog discounts a gap in its own schedule that
     // spanned such a transition.
     origin: Instant,
+    /// Written only by [`Self::advance`].
     phase: AtomicU8,
     stop_requested: AtomicBool,
+    os_disabled: AtomicBool,
     tap_progress_at_ms: AtomicU64,
 }
 
@@ -132,6 +224,7 @@ impl Default for WatchdogSignals {
             origin: Instant::now(),
             phase: AtomicU8::new(TapPhase::Starting as u8),
             stop_requested: AtomicBool::new(false),
+            os_disabled: AtomicBool::new(false),
             tap_progress_at_ms: AtomicU64::new(0),
         }
     }
@@ -149,19 +242,50 @@ impl WatchdogSignals {
     }
 
     pub fn phase(&self) -> TapPhase {
-        TapPhase::decode(self.phase.load(Ordering::Acquire))
+        // `advance` stores only bytes a phase encodes, so an unknown byte is
+        // no lifecycle step, and it cannot prove that the HID tap was
+        // destroyed. Treat it as hazardous so both watchdogs remain armed and
+        // the lifecycle timeout can fail safe instead of panicking or disarming.
+        TapPhase::decode(self.phase.load(Ordering::Acquire)).unwrap_or(TapPhase::Armed)
     }
 
-    pub fn set_phase(&self, phase: TapPhase) {
-        self.phase.store(phase as u8, Ordering::Release);
+    /// Take `transition`, or refuse it when the phase is not one it may
+    /// follow: the phase keeps its value and the refusal is logged with the
+    /// caller's location.
+    #[track_caller]
+    pub fn publish(&self, transition: Transition) {
+        if let Err(OutOfOrder { found }) = self.try_publish(transition) {
+            error!(
+                ?transition,
+                ?found,
+                at = %Location::caller(),
+                "tap lifecycle step out of order — refused, phase unchanged"
+            );
+        }
     }
 
-    /// Publish fresh progress before the short watchdog budget applies.
-    pub fn mark_armed(&self) {
-        // The watchdog reads phase before progress. Publishing `Armed` first
-        // could charge a completed probe against its old progress mark.
-        self.mark_tap_progress();
-        self.set_phase(TapPhase::Armed);
+    fn try_publish(&self, transition: Transition) -> Result<(), OutOfOrder> {
+        let (from, to) = transition.edge();
+        if to.judged_by_progress() {
+            // The watchdog reads phase before progress. Publishing the phase
+            // first could charge a completed probe against its old mark.
+            self.mark_tap_progress();
+        }
+        self.advance(from, to)
+    }
+
+    /// The phase cell's one write: `to`, when the cell holds a phase in `from`.
+    fn advance(&self, from: &[TapPhase], to: TapPhase) -> Result<(), OutOfOrder> {
+        self.phase
+            .try_update(Ordering::Release, Ordering::Acquire, |byte| {
+                TapPhase::decode(byte)
+                    .filter(|phase| from.contains(phase))
+                    .map(|_| to as u8)
+            })
+            .map(|_| ())
+            .map_err(|byte| OutOfOrder {
+                found: TapPhase::decode(byte),
+            })
     }
 
     pub fn request_stop(&self) {
@@ -170,6 +294,16 @@ impl WatchdogSignals {
 
     pub fn stop_requested(&self) -> bool {
         self.stop_requested.load(Ordering::Acquire)
+    }
+
+    /// Latch that the OS disabled the tap, for the next slice to re-arm.
+    pub fn note_os_disabled(&self) {
+        self.os_disabled.store(true, Ordering::Release);
+    }
+
+    /// Whether the OS disabled the tap since the last call, which consumes it.
+    pub fn take_os_disabled(&self) -> bool {
+        self.os_disabled.swap(false, Ordering::AcqRel)
     }
 
     pub fn mark_tap_progress(&self) {
@@ -190,21 +324,30 @@ impl WatchdogSignals {
     }
 }
 
+/// Publishes `ThreadExited` when the tap thread ends, however it ends. The
+/// thread declares it first, so it drops after every other local.
 pub(super) struct TapThreadExitGuard(Arc<WatchdogSignals>);
 
 impl Drop for TapThreadExitGuard {
     fn drop(&mut self) {
-        self.0.set_phase(TapPhase::ThreadExited);
+        if let Err(OutOfOrder { found }) = self.0.advance(THREAD_EXIT_FROM, TapPhase::ThreadExited)
+        {
+            error!(
+                ?found,
+                "tap thread exit out of order — refused, phase unchanged"
+            );
+        }
     }
 }
 
 /// The kernel's last sleep and wake instants — `kern.sleeptime` and
 /// `kern.waketime`, as microseconds since the epoch — compared for equality
-/// only. A change between two evaluations means the gap contained a system
-/// sleep or wake, the one kind of gap the watchdogs discount: both late #952
-/// exits on the reporting host straddled one (5 ms after `System Wake`, and
-/// within the second of a DarkWake). `kern.waketime` moves on every wake from
-/// sleep, dark or full, not on a DarkWake's promotion to a full wake.
+/// only. A change between two readings means the time between them contained
+/// a system sleep or wake, the one kind of gap the watchdogs discount: both
+/// late #952 exits on the reporting host straddled one (5 ms after
+/// `System Wake`, and within the second of a DarkWake). `kern.waketime` moves
+/// on every wake from sleep, dark or full, not on a DarkWake's promotion to a
+/// full wake.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PowerEpoch {
     pub slept_us: i64,
@@ -260,6 +403,24 @@ struct Stall {
     /// returns because the probe alone outlasted the short budget.
     budget: Duration,
     watched: Duration,
+    /// The longest the watchdog went between two looks at this stall, before
+    /// any sleep discount. Far above [`LIFECYCLE_POLL_INTERVAL`] means the
+    /// watchdog thread itself was not scheduled for that long.
+    largest_gap: Duration,
+}
+
+/// The budget a stall observed in `phase` is judged by.
+///
+/// A thread that published `Probing` reached that store, so it is alive and
+/// inside a named CoreGraphics/TCC call rather than wedged servicing the tap.
+/// Judge it against the probe budget for either exit reason — a stop request
+/// landing on a slow probe is the same situation.
+const fn budget_for(phase: TapPhase) -> Duration {
+    if matches!(phase, TapPhase::Probing) {
+        TAP_PROBE_BUDGET
+    } else {
+        TAP_SHUTDOWN_BUDGET
+    }
 }
 
 impl LifecycleWatchdog {
@@ -271,14 +432,13 @@ impl LifecycleWatchdog {
         // The whole gap counts, unless a kernel sleep or wake fell inside it:
         // then the process was frozen for an unknown part of it, and at most
         // `OBSERVATION_GAP` is charged.
-        let credit = self.last_evaluated.map_or(Duration::ZERO, |(last, power)| {
-            let gap = now.saturating_sub(last);
-            if power == observation.power {
-                gap
-            } else {
-                gap.min(OBSERVATION_GAP)
-            }
-        });
+        let gap = self
+            .last_evaluated
+            .map_or(Duration::ZERO, |(last, _)| now.saturating_sub(last));
+        let credit = match self.last_evaluated {
+            Some((_, power)) if power != observation.power => gap.min(OBSERVATION_GAP),
+            _ => gap,
+        };
         self.last_evaluated = Some((now, observation.power));
 
         match observation.phase {
@@ -296,10 +456,7 @@ impl LifecycleWatchdog {
 
         let timeout = if let Some(stopped) = self.stop_at {
             Some((LifecycleExitReason::StopTimedOut, stopped))
-        } else if matches!(
-            observation.phase,
-            TapPhase::Arming | TapPhase::Armed | TapPhase::Probing
-        ) {
+        } else if observation.phase.judged_by_progress() {
             Some((
                 LifecycleExitReason::TapThreadStalled,
                 observation.tap_progress_at,
@@ -311,30 +468,26 @@ impl LifecycleWatchdog {
             self.stall = None;
             return LifecycleDecision::Continue;
         };
-        // A thread that published `Probing` reached that store, so it is alive
-        // and inside a named CoreGraphics/TCC call rather than wedged servicing
-        // the tap. Judge it against the probe budget for either exit reason —
-        // a stop request landing on a slow probe is the same situation.
-        let budget = if observation.phase == TapPhase::Probing {
-            TAP_PROBE_BUDGET
-        } else {
-            TAP_SHUTDOWN_BUDGET
-        };
+        let budget = budget_for(observation.phase);
         // A stall seen for the first time is charged at most one credit for
         // whatever preceded this evaluation.
-        let watched = match self.stall {
+        let (watched, largest_gap) = match self.stall {
             Some(stall)
                 if stall.reason == reason && stall.started == started && stall.budget == budget =>
             {
-                stall.watched + credit
+                (stall.watched + credit, stall.largest_gap.max(gap))
             }
-            _ => now.saturating_sub(started).min(credit),
+            _ => {
+                let since_started = now.saturating_sub(started);
+                (since_started.min(credit), since_started.min(gap))
+            }
         };
         self.stall = Some(Stall {
             reason,
             started,
             budget,
             watched,
+            largest_gap,
         });
         if watched >= budget {
             LifecycleDecision::Exit {
@@ -345,6 +498,39 @@ impl LifecycleWatchdog {
         } else {
             LifecycleDecision::Continue
         }
+    }
+
+    /// Whether the stall the latest [`LifecycleDecision::Exit`] was made on
+    /// still stands in `fresh`, an observation read after that decision.
+    ///
+    /// The tap thread keeps running while this one decides. It can tear the
+    /// tap down or exit, and it can come back from a late run-loop slice: it
+    /// then marks progress and publishes `Probing`, or re-arms, before the
+    /// exit lands. Under heavy CPU load both threads are woken late together,
+    /// and an exit decided on the pre-slice mark force-exited agents whose tap
+    /// thread had just returned (#2210). A thread that marked progress since
+    /// the decided stall began is not wedged, so the exit is withdrawn and the
+    /// next evaluation times whatever follows as a new stall. A wedged thread
+    /// cannot mark progress, so this never spares one.
+    pub fn still_stalled(&self, fresh: LifecycleObservation) -> bool {
+        let Some(stall) = self.stall else {
+            return false;
+        };
+        if budget_for(fresh.phase) != stall.budget {
+            return false;
+        }
+        match stall.reason {
+            LifecycleExitReason::TapThreadStalled => {
+                fresh.phase.judged_by_progress() && fresh.tap_progress_at == stall.started
+            }
+            LifecycleExitReason::StopTimedOut => fresh.phase != TapPhase::ThreadExited,
+        }
+    }
+
+    /// The longest gap between two evaluations of the stall being timed;
+    /// zero when there is none.
+    pub fn largest_gap(&self) -> Duration {
+        self.stall.map_or(Duration::ZERO, |stall| stall.largest_gap)
     }
 }
 
@@ -387,10 +573,22 @@ pub(super) struct StuckCallback {
 /// The callback watchdog's decision state: the same watched-time rule as
 /// [`LifecycleWatchdog`], over the callback's entry time instead of the tap
 /// thread's progress mark.
+///
+/// Unlike the lifecycle watchdog it reads the [`PowerEpoch`] only on a poll
+/// that finds a callback entered: an idle poll charges nothing, so the two
+/// `sysctlbyname` calls it would make on each of 50 polls a second judge
+/// nothing (#2096). The first entered poll after idle ones therefore compares
+/// against the epoch it read last, not the previous poll's, so a sleep or wake
+/// anywhere since that read discounts its gap. That charges no gap more than
+/// a read on every poll would — a transition inside the gap still moves the
+/// epoch — and costs at most one capped [`CALLBACK_OBSERVATION_GAP`] on a
+/// callback first seen after a transition.
 #[derive(Debug, Default)]
 pub(super) struct CallbackWatchdog {
-    /// When the previous poll ran, and the power epoch it saw.
-    last_polled: Option<(u64, PowerEpoch)>,
+    /// When the previous poll ran.
+    last_polled_ms: Option<u64>,
+    /// The power epoch the newest entered poll (or the spawn) read.
+    power: Option<PowerEpoch>,
     /// The entry being timed and how much of it the watchdog was awake to see.
     entry: Option<(u64, Duration)>,
 }
@@ -402,31 +600,34 @@ impl CallbackWatchdog {
     /// a first poll with no predecessor crediting nothing.
     pub fn watching_since(now_ms: u64, power: PowerEpoch) -> Self {
         Self {
-            last_polled: Some((now_ms, power)),
+            last_polled_ms: Some(now_ms),
+            power: Some(power),
             entry: None,
         }
     }
 
     /// Fold one poll at `now_ms`; `entered_at_ms` is the callback's entry time
-    /// while it is inside the callback, `None` while it is idle.
+    /// while it is inside the callback, `None` while it is idle. `read_power`
+    /// runs only when a callback is entered.
     pub fn evaluate(
         &mut self,
         now_ms: u64,
         entered_at_ms: Option<u64>,
-        power: PowerEpoch,
+        read_power: impl FnOnce() -> PowerEpoch,
     ) -> Option<StuckCallback> {
-        let credit = self.last_polled.map_or(Duration::ZERO, |(last, seen)| {
-            let gap = Duration::from_millis(now_ms.saturating_sub(last));
-            if seen == power {
-                gap
-            } else {
-                gap.min(CALLBACK_OBSERVATION_GAP)
-            }
+        let gap = self.last_polled_ms.map_or(Duration::ZERO, |last| {
+            Duration::from_millis(now_ms.saturating_sub(last))
         });
-        self.last_polled = Some((now_ms, power));
+        self.last_polled_ms = Some(now_ms);
         let Some(entered_at_ms) = entered_at_ms else {
             self.entry = None;
             return None;
+        };
+        let power = read_power();
+        let credit = if self.power.replace(power) == Some(power) {
+            gap
+        } else {
+            gap.min(CALLBACK_OBSERVATION_GAP)
         };
         let stalled = Duration::from_millis(now_ms.saturating_sub(entered_at_ms));
         // An entry seen for the first time is charged at most one credit: a
@@ -444,20 +645,190 @@ impl CallbackWatchdog {
 mod tests {
     use super::*;
 
+    const PHASES: [TapPhase; 6] = [
+        TapPhase::Starting,
+        TapPhase::Arming,
+        TapPhase::Armed,
+        TapPhase::Probing,
+        TapPhase::TapStopped,
+        TapPhase::ThreadExited,
+    ];
+
+    const TRANSITIONS: [Transition; 6] = [
+        Transition::BeginArming,
+        Transition::Arm,
+        Transition::EnterProbing,
+        Transition::BeginTeardown,
+        Transition::TapDestroyed,
+        Transition::SpawnFailed,
+    ];
+
+    /// Signals in `phase` with no progress marked, on a clock started 2 s
+    /// ago: past the short budget, so a fresh mark stands apart from none.
+    fn signals_at(phase: TapPhase) -> WatchdogSignals {
+        WatchdogSignals {
+            origin: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
+            phase: AtomicU8::new(phase as u8),
+            ..WatchdogSignals::default()
+        }
+    }
+
     #[test]
     fn tap_phase_decoder_is_total_and_fails_safe() {
-        assert_eq!(TapPhase::decode(0), TapPhase::Starting);
-        assert_eq!(TapPhase::decode(1), TapPhase::Arming);
-        assert_eq!(TapPhase::decode(2), TapPhase::Armed);
-        assert_eq!(TapPhase::decode(3), TapPhase::Probing);
-        assert_eq!(TapPhase::decode(4), TapPhase::TapStopped);
-        assert_eq!(TapPhase::decode(5), TapPhase::ThreadExited);
-        assert_eq!(TapPhase::decode(6), TapPhase::Armed);
-        assert_eq!(TapPhase::decode(u8::MAX), TapPhase::Armed);
+        for (byte, phase) in (0..).zip(PHASES) {
+            assert_eq!(TapPhase::decode(byte), Some(phase));
+            assert_eq!(phase as u8, byte);
+        }
+        for byte in 6..=u8::MAX {
+            assert_eq!(TapPhase::decode(byte), None);
+        }
 
-        let signals = WatchdogSignals::default();
-        signals.phase.store(u8::MAX, Ordering::Relaxed);
+        // An unknown byte reads as a live tap, and no step can overwrite it
+        // with a phase that would disarm either watchdog.
+        let signals = Arc::new(WatchdogSignals {
+            phase: AtomicU8::new(u8::MAX),
+            ..WatchdogSignals::default()
+        });
         assert_eq!(signals.phase(), TapPhase::Armed);
+        for transition in TRANSITIONS {
+            assert_eq!(
+                signals.try_publish(transition),
+                Err(OutOfOrder { found: None })
+            );
+        }
+        drop(signals.thread_exit_guard());
+        assert_eq!(signals.phase.load(Ordering::Acquire), u8::MAX);
+    }
+
+    #[test]
+    fn the_lifecycle_admits_exactly_the_paths_the_hook_takes() {
+        use Transition::{Arm, BeginArming, BeginTeardown, EnterProbing, TapDestroyed};
+
+        // `Backend::start` publishes this one when the tap thread was never spawned.
+        let signals = signals_at(TapPhase::Starting);
+        assert_eq!(signals.try_publish(Transition::SpawnFailed), Ok(()));
+        assert_eq!(signals.phase(), TapPhase::ThreadExited);
+        let mut taken = vec![(Transition::SpawnFailed, TapPhase::Starting)];
+
+        // Every way `thread_main` and `service_tap` leave the tap thread.
+        let paths: [&[Transition]; 6] = [
+            // Tap creation, its run-loop source, or the callback watchdog failed.
+            &[BeginArming],
+            // Unwinding while armed, or inside a probe.
+            &[BeginArming, Arm],
+            &[BeginArming, Arm, EnterProbing],
+            // The parent dropped before the run loop was ready.
+            &[BeginArming, Arm, TapDestroyed],
+            // A stop, or a stopped run loop, between probes.
+            &[
+                BeginArming,
+                Arm,
+                EnterProbing,
+                Arm,
+                BeginTeardown,
+                TapDestroyed,
+            ],
+            // A revoked grant or a spent re-arm budget, inside a probe.
+            &[BeginArming, Arm, EnterProbing, BeginTeardown, TapDestroyed],
+        ];
+        for path in paths {
+            let signals = Arc::new(signals_at(TapPhase::Starting));
+            let thread_exit = signals.thread_exit_guard();
+            for &transition in path {
+                let from = signals.phase();
+                assert_eq!(
+                    signals.try_publish(transition),
+                    Ok(()),
+                    "{transition:?} from {from:?} in {path:?}"
+                );
+                taken.push((transition, from));
+            }
+            drop(thread_exit);
+            assert_eq!(signals.phase(), TapPhase::ThreadExited, "{path:?}");
+        }
+
+        // Every other step is refused, and leaves the phase where it was.
+        for transition in TRANSITIONS {
+            for from in PHASES {
+                if taken.contains(&(transition, from)) {
+                    continue;
+                }
+                let signals = signals_at(from);
+                assert_eq!(
+                    signals.try_publish(transition),
+                    Err(OutOfOrder { found: Some(from) }),
+                    "{transition:?} from {from:?}"
+                );
+                assert_eq!(signals.phase(), from);
+            }
+        }
+    }
+
+    #[test]
+    fn every_step_into_a_progress_judged_phase_marks_progress_first() {
+        for transition in TRANSITIONS {
+            let (from, to) = transition.edge();
+            let signals = signals_at(from[0]);
+            signals.publish(transition);
+            assert_eq!(signals.phase(), to);
+            // Only the steps out of the live tap leave the mark alone.
+            let marks = !matches!(
+                transition,
+                Transition::TapDestroyed | Transition::SpawnFailed
+            );
+            assert_eq!(
+                signals.tap_progress_at() >= Duration::from_secs(2),
+                marks,
+                "{transition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_latches_never_move_the_phase_or_each_other() {
+        use Transition::{Arm, BeginArming, BeginTeardown, EnterProbing, TapDestroyed};
+        let path = [
+            BeginArming,
+            Arm,
+            EnterProbing,
+            Arm,
+            EnterProbing,
+            BeginTeardown,
+            TapDestroyed,
+        ];
+        // A stop may land before any step; before `Arm` only in principle,
+        // since `HookInner` exists only once the tap is armed. Either way it
+        // blocks no step, and no step clears it.
+        for stop_at in 0..=path.len() {
+            let signals = Arc::new(signals_at(TapPhase::Starting));
+            let thread_exit = signals.thread_exit_guard();
+            for (step, &transition) in path.iter().enumerate() {
+                if step == stop_at {
+                    let phase = signals.phase();
+                    signals.request_stop();
+                    assert_eq!(signals.phase(), phase);
+                }
+                assert_eq!(signals.stop_requested(), step >= stop_at);
+                assert_eq!(signals.try_publish(transition), Ok(()));
+            }
+            if stop_at == path.len() {
+                signals.request_stop();
+            }
+            drop(thread_exit);
+            assert_eq!(signals.phase(), TapPhase::ThreadExited);
+            assert!(signals.stop_requested());
+            assert!(!signals.take_os_disabled(), "a stop is no OS disable");
+        }
+
+        // An OS disable is reported to exactly one slice, however often the
+        // callback saw it, and touches neither the phase nor the stop latch.
+        let signals = signals_at(TapPhase::Armed);
+        signals.note_os_disabled();
+        signals.note_os_disabled();
+        assert_eq!(signals.phase(), TapPhase::Armed);
+        assert!(!signals.stop_requested());
+        assert!(signals.take_os_disabled());
+        assert!(!signals.take_os_disabled());
     }
 
     #[test]
@@ -622,10 +993,7 @@ mod tests {
 
     #[test]
     fn a_probe_return_between_watchdog_polls_refreshes_the_stall() {
-        let signals = WatchdogSignals {
-            origin: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
-            ..WatchdogSignals::default()
-        };
+        let signals = signals_at(TapPhase::Probing);
         let mut watchdog = LifecycleWatchdog::default();
         assert_eq!(
             watchdog.evaluate(
@@ -634,9 +1002,8 @@ mod tests {
             ),
             LifecycleDecision::Continue
         );
-        signals.set_phase(TapPhase::Probing);
         let probe_returned = signals.now();
-        signals.mark_armed();
+        signals.publish(Transition::Arm);
 
         // No poll saw `Probing`, so the fresh mark must distinguish this
         // return from an armed tap that stalled for the whole interval.
@@ -655,11 +1022,7 @@ mod tests {
             (false, LifecycleExitReason::TapThreadStalled),
             (true, LifecycleExitReason::StopTimedOut),
         ] {
-            let signals = WatchdogSignals {
-                origin: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
-                ..WatchdogSignals::default()
-            };
-            signals.set_phase(TapPhase::Probing);
+            let signals = signals_at(TapPhase::Probing);
             if stop_requested {
                 signals.request_stop();
             }
@@ -668,7 +1031,7 @@ mod tests {
                 signals.stop_requested(),
                 signals.tap_progress_at(),
             );
-            signals.mark_armed();
+            signals.publish(Transition::BeginTeardown);
             let teardown = observation(
                 signals.phase(),
                 signals.stop_requested(),
@@ -951,6 +1314,121 @@ mod tests {
     }
 
     #[test]
+    fn progress_after_an_exit_decision_withdraws_it() {
+        // #2210: under load the tap thread came back from a late slice between
+        // the decision and the exit and published `Probing`, and the agent was
+        // exited anyway, logging a 2.0 s probe stall against a 10 s budget.
+        let mut watchdog = LifecycleWatchdog::default();
+        let stalled = observation(TapPhase::Armed, false, Duration::ZERO);
+        assert_eq!(
+            watched(&mut watchdog, TAP_SHUTDOWN_BUDGET, stalled),
+            exit(
+                LifecycleExitReason::TapThreadStalled,
+                TAP_SHUTDOWN_BUDGET,
+                TAP_SHUTDOWN_BUDGET
+            )
+        );
+        assert!(
+            watchdog.still_stalled(stalled),
+            "nothing moved: the exit stands"
+        );
+        assert!(
+            watchdog.still_stalled(LifecycleObservation {
+                stop_requested: true,
+                ..stalled
+            }),
+            "a stop request is no progress"
+        );
+
+        let returned = TAP_SHUTDOWN_BUDGET + Duration::from_millis(1);
+        assert!(
+            !watchdog.still_stalled(observation(TapPhase::Probing, false, returned)),
+            "the slice returned and the thread entered its probe"
+        );
+        assert!(
+            !watchdog.still_stalled(observation(TapPhase::Armed, false, returned)),
+            "the slice returned and the thread re-armed"
+        );
+        assert!(!watchdog.still_stalled(observation(TapPhase::TapStopped, false, Duration::ZERO)));
+        assert!(!watchdog.still_stalled(observation(
+            TapPhase::ThreadExited,
+            false,
+            Duration::ZERO
+        )));
+
+        // The withdrawn exit leaves a fresh stall that gets the full budget.
+        let fresh = observation(TapPhase::Armed, false, returned);
+        assert_eq!(
+            watchdog.evaluate(returned, fresh),
+            LifecycleDecision::Continue
+        );
+        assert_eq!(
+            watched(&mut watchdog, returned + TAP_SHUTDOWN_BUDGET, fresh),
+            exit(
+                LifecycleExitReason::TapThreadStalled,
+                TAP_SHUTDOWN_BUDGET,
+                TAP_SHUTDOWN_BUDGET
+            )
+        );
+    }
+
+    #[test]
+    fn a_stop_exit_stands_until_the_thread_exits() {
+        let mut watchdog = LifecycleWatchdog::default();
+        let stopping = observation(TapPhase::Armed, true, Duration::ZERO);
+        assert_eq!(
+            watched(&mut watchdog, TAP_SHUTDOWN_BUDGET, stopping),
+            exit(
+                LifecycleExitReason::StopTimedOut,
+                TAP_SHUTDOWN_BUDGET,
+                TAP_SHUTDOWN_BUDGET
+            )
+        );
+        assert!(watchdog.still_stalled(stopping));
+        assert!(
+            watchdog.still_stalled(observation(TapPhase::TapStopped, true, Duration::ZERO)),
+            "a destroyed tap still owes the thread exit"
+        );
+        assert!(
+            !watchdog.still_stalled(observation(TapPhase::Probing, true, Duration::ZERO)),
+            "a stop that lands on a probe is judged by the probe budget"
+        );
+        assert!(!watchdog.still_stalled(observation(TapPhase::ThreadExited, true, Duration::ZERO)));
+    }
+
+    #[test]
+    fn largest_gap_reports_the_longest_look_away() {
+        let mut watchdog = LifecycleWatchdog::default();
+        assert_eq!(watchdog.largest_gap(), Duration::ZERO);
+        let stalled = observation(TapPhase::Armed, false, Duration::ZERO);
+        assert_eq!(
+            watched(&mut watchdog, Duration::from_millis(600), stalled),
+            LifecycleDecision::Continue
+        );
+        assert_eq!(watchdog.largest_gap(), LIFECYCLE_POLL_INTERVAL);
+
+        // Descheduled for 450 ms under load (#2210): charged in full, and
+        // reported so an exit log tells a starved process from a wedged tap.
+        let late = Duration::from_millis(1_050);
+        assert_eq!(
+            watchdog.evaluate(late, stalled),
+            LifecycleDecision::Continue
+        );
+        assert_eq!(watchdog.largest_gap(), Duration::from_millis(450));
+
+        // A new stall keeps its own record, from where it began.
+        let restarted = late + Duration::from_millis(50);
+        assert_eq!(
+            watchdog.evaluate(
+                late + LIFECYCLE_POLL_INTERVAL,
+                observation(TapPhase::Armed, false, restarted)
+            ),
+            LifecycleDecision::Continue
+        );
+        assert_eq!(watchdog.largest_gap(), Duration::from_millis(50));
+    }
+
+    #[test]
     fn starting_and_healthy_states_never_time_out() {
         let mut watchdog = LifecycleWatchdog::default();
         let starting = observation(TapPhase::Starting, false, Duration::ZERO);
@@ -1022,7 +1500,7 @@ mod tests {
         // that poll rather than being granted a second budget.
         let mut watchdog = CallbackWatchdog::watching_since(0, epoch(0));
         assert_eq!(
-            watchdog.evaluate(300, Some(5), epoch(0)),
+            watchdog.evaluate(300, Some(5), || epoch(0)),
             Some(StuckCallback {
                 watched: Duration::from_millis(295),
                 stalled: Duration::from_millis(295),
@@ -1030,7 +1508,7 @@ mod tests {
         );
         // Unless the kernel slept and woke inside that first gap.
         let mut slept = CallbackWatchdog::watching_since(0, epoch(0));
-        assert_eq!(slept.evaluate(300, Some(5), epoch(1)), None);
+        assert_eq!(slept.evaluate(300, Some(5), || epoch(1)), None);
     }
 
     #[test]
@@ -1040,13 +1518,13 @@ mod tests {
         let mut watchdog = CallbackWatchdog::default();
         let poll = u64::try_from(CALLBACK_POLL_INTERVAL.as_millis()).unwrap();
         for tick in 0..=50 {
-            assert_eq!(watchdog.evaluate(tick * poll, None, epoch(0)), None);
+            assert_eq!(watchdog.evaluate(tick * poll, None, || epoch(0)), None);
         }
         let entered = 50 * poll + 15;
         let mut now = 51 * poll;
         while now.saturating_sub(entered) < 200 {
             assert_eq!(
-                watchdog.evaluate(now, Some(entered), epoch(0)),
+                watchdog.evaluate(now, Some(entered), || epoch(0)),
                 None,
                 "{} ms inside the callback is within budget",
                 now - entered
@@ -1054,7 +1532,7 @@ mod tests {
             now += poll;
         }
         assert_eq!(
-            watchdog.evaluate(now, Some(entered), epoch(0)),
+            watchdog.evaluate(now, Some(entered), || epoch(0)),
             Some(StuckCallback {
                 watched: Duration::from_millis(now - entered),
                 stalled: Duration::from_millis(now - entered),
@@ -1064,8 +1542,8 @@ mod tests {
 
         // A fresh high-frequency event must not inherit an older entry time.
         let mut fresh = CallbackWatchdog::default();
-        assert_eq!(fresh.evaluate(9_800, Some(9_600), epoch(0)), None);
-        assert_eq!(fresh.evaluate(9_820, Some(9_801), epoch(0)), None);
+        assert_eq!(fresh.evaluate(9_800, Some(9_600), || epoch(0)), None);
+        assert_eq!(fresh.evaluate(9_820, Some(9_801), || epoch(0)), None);
     }
 
     #[test]
@@ -1077,39 +1555,42 @@ mod tests {
         let mut watchdog = CallbackWatchdog::default();
         let poll = u64::try_from(CALLBACK_POLL_INTERVAL.as_millis()).unwrap();
         for tick in 0..=50 {
-            assert_eq!(watchdog.evaluate(tick * poll, None, epoch(0)), None);
+            assert_eq!(watchdog.evaluate(tick * poll, None, || epoch(0)), None);
         }
         let entered = 50 * poll + 15;
-        assert_eq!(watchdog.evaluate(51 * poll, Some(entered), epoch(0)), None);
+        assert_eq!(
+            watchdog.evaluate(51 * poll, Some(entered), || epoch(0)),
+            None
+        );
         let thawed = 51 * poll + 2_500;
         assert_eq!(
-            watchdog.evaluate(thawed, Some(entered), epoch(1)),
+            watchdog.evaluate(thawed, Some(entered), || epoch(1)),
             None,
             "5 ms watched + one capped gap is under budget"
         );
         // The thawed callback returns; the next entry starts over.
-        assert_eq!(watchdog.evaluate(thawed + poll, None, epoch(1)), None);
+        assert_eq!(watchdog.evaluate(thawed + poll, None, || epoch(1)), None);
         assert_eq!(
-            watchdog.evaluate(thawed + 2 * poll, Some(thawed + poll + 3), epoch(1)),
+            watchdog.evaluate(thawed + 2 * poll, Some(thawed + poll + 3), || epoch(1)),
             None
         );
 
         // A callback that stays entered after the thaw is still stuck.
         let mut wedged = CallbackWatchdog::default();
         for tick in 0..=50 {
-            assert_eq!(wedged.evaluate(tick * poll, None, epoch(0)), None);
+            assert_eq!(wedged.evaluate(tick * poll, None, || epoch(0)), None);
         }
-        assert_eq!(wedged.evaluate(51 * poll, Some(entered), epoch(0)), None);
-        assert_eq!(wedged.evaluate(thawed, Some(entered), epoch(1)), None);
+        assert_eq!(wedged.evaluate(51 * poll, Some(entered), || epoch(0)), None);
+        assert_eq!(wedged.evaluate(thawed, Some(entered), || epoch(1)), None);
         // 200 ms budget, less the 5 ms watched and the 100 ms capped gap.
         let mut now = thawed;
         for _ in 0..4 {
             now += poll;
-            assert_eq!(wedged.evaluate(now, Some(entered), epoch(1)), None);
+            assert_eq!(wedged.evaluate(now, Some(entered), || epoch(1)), None);
         }
         now += poll;
         assert_eq!(
-            wedged.evaluate(now, Some(entered), epoch(1)),
+            wedged.evaluate(now, Some(entered), || epoch(1)),
             Some(StuckCallback {
                 watched: Duration::from_millis(205),
                 stalled: Duration::from_millis(now - entered),
@@ -1122,9 +1603,9 @@ mod tests {
         // A poll delayed by scheduling alone, with the callback stuck the whole
         // time, is not a freeze: the exit lands on that poll.
         let mut watchdog = CallbackWatchdog::default();
-        assert_eq!(watchdog.evaluate(0, Some(0), epoch(0)), None);
+        assert_eq!(watchdog.evaluate(0, Some(0), || epoch(0)), None);
         assert_eq!(
-            watchdog.evaluate(3_000, Some(0), epoch(0)),
+            watchdog.evaluate(3_000, Some(0), || epoch(0)),
             Some(StuckCallback {
                 watched: Duration::from_millis(3_000),
                 stalled: Duration::from_millis(3_000),
@@ -1135,13 +1616,83 @@ mod tests {
     #[test]
     fn repeated_sleep_cycles_still_accumulate_a_stuck_callback() {
         let mut watchdog = CallbackWatchdog::default();
-        assert_eq!(watchdog.evaluate(0, Some(0), epoch(0)), None);
-        assert_eq!(watchdog.evaluate(3_000, Some(0), epoch(1)), None);
+        assert_eq!(watchdog.evaluate(0, Some(0), || epoch(0)), None);
+        assert_eq!(watchdog.evaluate(3_000, Some(0), || epoch(1)), None);
         assert_eq!(
-            watchdog.evaluate(6_000, Some(0), epoch(2)),
+            watchdog.evaluate(6_000, Some(0), || epoch(2)),
             Some(StuckCallback {
                 watched: CALLBACK_OBSERVATION_GAP * 2,
                 stalled: Duration::from_millis(6_000),
+            })
+        );
+    }
+
+    #[test]
+    fn an_idle_poll_does_not_read_the_power_epoch() {
+        // Two sysctls on every 20 ms poll judged nothing while no callback
+        // was entered (#2096): only a poll that finds one entered reads them.
+        let reads = std::cell::Cell::new(0_u32);
+        let read = || {
+            reads.set(reads.get() + 1);
+            epoch(0)
+        };
+        let mut watchdog = CallbackWatchdog::watching_since(0, epoch(0));
+        let poll = u64::try_from(CALLBACK_POLL_INTERVAL.as_millis()).unwrap();
+        for tick in 1..=50 {
+            assert_eq!(watchdog.evaluate(tick * poll, None, read), None);
+        }
+        assert_eq!(reads.get(), 0, "idle polls read no epoch");
+        assert_eq!(
+            watchdog.evaluate(51 * poll, Some(51 * poll - 5), read),
+            None
+        );
+        assert_eq!(reads.get(), 1, "an entered poll reads it once");
+    }
+
+    #[test]
+    fn a_sleep_while_idle_still_discounts_the_next_entry() {
+        // Idle polls keep the spawn's epoch as the reference. The kernel
+        // slept and woke during them, unread; a callback entered 5 ms after
+        // the last one and a poll delayed 300 ms then sees epoch 1.
+        let poll = u64::try_from(CALLBACK_POLL_INTERVAL.as_millis()).unwrap();
+        let idle_until = 50 * poll;
+        let entered = idle_until + 5;
+        let first_sighting = idle_until + 300;
+        let mut slept = CallbackWatchdog::watching_since(0, epoch(0));
+        for tick in 1..=50 {
+            assert_eq!(slept.evaluate(tick * poll, None, || epoch(1)), None);
+        }
+        assert_eq!(
+            slept.evaluate(first_sighting, Some(entered), || epoch(1)),
+            None,
+            "a transition since the last read caps the first sighting"
+        );
+        // Later polls compare consecutive reads and charge in full again, so
+        // a callback that stays entered is still caught.
+        let mut now = first_sighting;
+        for _ in 0..4 {
+            now += poll;
+            assert_eq!(slept.evaluate(now, Some(entered), || epoch(1)), None);
+        }
+        now += poll;
+        assert_eq!(
+            slept.evaluate(now, Some(entered), || epoch(1)),
+            Some(StuckCallback {
+                watched: CALLBACK_OBSERVATION_GAP + CALLBACK_POLL_INTERVAL * 5,
+                stalled: Duration::from_millis(now - entered),
+            })
+        );
+        // With no transition at all, the same delayed sighting is charged in
+        // full, as before the epoch read became lazy.
+        let mut awake = CallbackWatchdog::watching_since(0, epoch(0));
+        for tick in 1..=50 {
+            assert_eq!(awake.evaluate(tick * poll, None, || epoch(0)), None);
+        }
+        assert_eq!(
+            awake.evaluate(first_sighting, Some(entered), || epoch(0)),
+            Some(StuckCallback {
+                watched: Duration::from_millis(295),
+                stalled: Duration::from_millis(295),
             })
         );
     }

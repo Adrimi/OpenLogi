@@ -77,6 +77,10 @@ pub enum Effect<'a> {
     /// action (the config target is opened via the `opener` crate, not
     /// through any per-OS synthesis path), so from a backend's point of
     /// view it is exactly as much a no-op as the DPI actions.
+    ///
+    /// [`Action::HoldModifier`] is here because the agent holds its modifiers
+    /// for the lifetime of the press (`openlogi_inject::press_hold_modifier`),
+    /// so a one-shot dispatch has nothing to post.
     AgentSide,
 }
 
@@ -281,17 +285,27 @@ impl Action {
             Action::BrightnessUp => Effect::Media(MediaKey::BrightnessUp),
             Action::BrightnessDown => Effect::Media(MediaKey::BrightnessDown),
 
-            // DPI/SmartShift/precision mode/the Actions Ring/OpenApplication
-            // are all handled above (or beside) the injector — see
-            // `Effect::AgentSide`.
+            // DPI/SmartShift/precision mode/Easy-Switch/the Actions
+            // Ring/OpenApplication are all handled above (or beside) the
+            // injector — see `Effect::AgentSide`.
             Action::CycleDpiPresets
+            | Action::NextDpiPreset
+            | Action::PreviousDpiPreset
+            | Action::DpiShift
+            | Action::GShift
             | Action::SetDpiPreset(_)
             | Action::ToggleSmartShift
             | Action::TogglePrecisionMode
+            | Action::EasySwitchChannel1
+            | Action::EasySwitchChannel2
+            | Action::EasySwitchChannel3
             | Action::ShowActionsRing
             | Action::KeyboardBacklightUp
             | Action::KeyboardBacklightDown
-            | Action::OpenApplication(_) => Effect::AgentSide,
+            | Action::PreviousKeypadPage
+            | Action::NextKeypadPage
+            | Action::OpenApplication(_)
+            | Action::HoldModifier(_) => Effect::AgentSide,
 
             Action::ScrollUp => Effect::Scroll { dx: 0, dy: 1 },
             Action::ScrollDown => Effect::Scroll { dx: 0, dy: -1 },

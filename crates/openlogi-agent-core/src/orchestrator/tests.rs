@@ -10,8 +10,9 @@ use super::{
     settings_moved, stable_id, wheel_inverted,
 };
 use crate::hardware::WheelModeChange;
+use crate::watchers::keyboard::KeyboardSpec;
 use openlogi_core::app::ForegroundApp;
-use openlogi_core::binding::{Action, Binding, ButtonId};
+use openlogi_core::binding::{Action, Binding, ButtonId, GridKey};
 use openlogi_core::config::{
     Config, DeviceConfig, DisableKey, LightSettings, LinkConfig, ScrollResolution,
     VerticalScrollSensitivity,
@@ -34,6 +35,7 @@ mod device_list;
 mod device_settings;
 mod disable_keys_native_write;
 mod disabled_keys;
+mod flow;
 mod light_changes;
 mod light_reload;
 mod lock_keys;
@@ -42,6 +44,7 @@ mod os_layout;
 mod pointer_speed;
 mod publication;
 mod reapply;
+mod saved_settings;
 
 /// An orchestrator wired to a state cell nobody subscribes to. The publishing
 /// paths still run, so a mutator that stops republishing shows up here rather
@@ -71,6 +74,16 @@ fn dev(key: &str, slot: u8, online: bool) -> AgentDevice {
     }
 }
 
+/// The one keyboard spec `orch` publishes, or `None` when it publishes none.
+fn sole_keyboard_spec(orch: &Orchestrator) -> Option<KeyboardSpec> {
+    let mut specs = orch.keyboard_specs_for();
+    assert!(
+        specs.len() <= 1,
+        "expected at most one keyboard spec: {specs:?}"
+    );
+    specs.pop()
+}
+
 fn direct_inventory(serial_number: Option<&str>, unit_id: [u8; 4]) -> DeviceInventory {
     DeviceInventory {
         receiver: ReceiverInfo {
@@ -96,6 +109,7 @@ fn direct_inventory(serial_number: Option<&str>, unit_id: [u8; 4]) -> DeviceInve
             }),
             capabilities: Some(Capabilities::presumed_from_kind(DeviceKind::Mouse)),
             settings_revision: 0,
+            hidpp10: false,
         }],
     }
 }
