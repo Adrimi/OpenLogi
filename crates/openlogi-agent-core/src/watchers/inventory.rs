@@ -570,11 +570,17 @@ impl InventoryWorker {
         let (event, outcome, replaced) = match result {
             Ok(inventories) => {
                 let known = self.state.raw_nodes.compx.clone();
+                let mut silent_compx = false;
                 let standalone = self
                     .hardware
                     .enumerate_standalone(&known)
                     .await
                     .map(|scan| {
+                        silent_compx = scan.devices.iter().any(|device| {
+                            let route = device.route();
+                            openlogi_hid::compx::is_compx_route(&route)
+                                && !scan.compx.iter().any(|mouse| mouse.route() == &route)
+                        });
                         self.state.raw_nodes.remember_compx(scan.compx);
                         scan.devices
                     });
@@ -597,7 +603,8 @@ impl InventoryWorker {
                             .iter()
                             .flat_map(|inventory| &inventory.paired)
                             .any(|device| !device.online)
-                            || standalone.iter().any(|device| !device.online),
+                            || standalone.iter().any(|device| !device.online)
+                            || silent_compx,
                     );
                 }
                 let needs_repair = self.enumerator.retry_needed_last_tick()
