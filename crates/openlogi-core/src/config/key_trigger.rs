@@ -41,7 +41,8 @@ impl KeyModifiers {
 /// A keyboard trigger: a keycode plus an optional modifier mask. The parse
 /// format is `[mod+]+key`, e.g. `"f1"`, `"shift+cmd+f5"`. Modifier names:
 /// `shift`, `control` (alias `ctrl`), `option` (alias `alt`), `command`
-/// (alias `cmd`). Key names are [`FunctionKey`]'s: `esc`, `f1`..`f19`.
+/// (alias `cmd`). Key names are [`FunctionKey`]'s: `esc`, `f1`..`f19`, plus `ins` (alias
+/// `insert`).
 ///
 /// Serializes as its string form (via `Display`) so it can be a TOML map key:
 /// `[keyboard.bindings]` keys are `"f1"`, `"shift+f2"`, etc.
@@ -52,6 +53,14 @@ pub struct KeyTrigger {
     /// Modifier mask that must also be held.
     pub modifiers: KeyModifiers,
 }
+
+/// The macOS keycode (`kVK_Help`) of the `Insert` key a compact board prints in
+/// the F13 position. It is not on the function row, so it is a trigger by
+/// itself rather than a [`FunctionKey`].
+const INSERT_KEYCODE: u16 = 0x72;
+
+/// How an `Insert` trigger is written in `config.toml`.
+const INSERT_NAME: &str = "ins";
 
 impl std::fmt::Display for KeyTrigger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,8 +77,14 @@ impl std::fmt::Display for KeyTrigger {
                 separator = "+";
             }
         }
-        let key = FunctionKey::from_keycode(self.keycode).ok_or(std::fmt::Error)?;
-        write!(f, "{separator}{}", key.name())
+        let name = if self.keycode == INSERT_KEYCODE {
+            INSERT_NAME
+        } else {
+            FunctionKey::from_keycode(self.keycode)
+                .ok_or(std::fmt::Error)?
+                .name()
+        };
+        write!(f, "{separator}{name}")
     }
 }
 
@@ -111,9 +126,13 @@ impl std::str::FromStr for KeyTrigger {
             }
         }
         let key = key_part[0].to_ascii_lowercase();
-        let keycode = FunctionKey::from_name(&key)
-            .ok_or_else(|| ParseTriggerError(format!("unknown key '{key}'")))?
-            .keycode();
+        let keycode = if key == INSERT_NAME || key == "insert" {
+            INSERT_KEYCODE
+        } else {
+            FunctionKey::from_name(&key)
+                .ok_or_else(|| ParseTriggerError(format!("unknown key '{key}'")))?
+                .keycode()
+        };
         Ok(KeyTrigger {
             keycode,
             modifiers: mods,

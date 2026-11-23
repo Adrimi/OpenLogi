@@ -42,6 +42,17 @@ fn key_trigger_parses_and_displays_extended_function_keys() {
 }
 
 #[test]
+fn key_trigger_parses_and_displays_insert() {
+    let ins: KeyTrigger = "ins".parse().expect("parse Insert trigger");
+    let alias: KeyTrigger = "shift+insert".parse().expect("parse Insert alias");
+
+    assert_eq!(ins.keycode, 0x72);
+    assert_eq!(ins.to_string(), "ins");
+    assert_eq!(alias.keycode, 0x72);
+    assert_eq!(alias.to_string(), "shift+ins");
+}
+
+#[test]
 fn key_trigger_rejects_unknown() {
     "f99"
         .parse::<KeyTrigger>()
