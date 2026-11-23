@@ -21,7 +21,7 @@ use crate::host_lock::ReceiverRegisterPhase;
 /// reconciliation through the memoized feature index (see [`read_battery`]).
 /// Elapsed time rather than scan count preserves cache freshness now that
 /// event-driven scans are intentionally irregular.
-pub(super) const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+pub(super) const REFRESH_INTERVAL: Duration = Duration::from_mins(5);
 
 /// How long a due refresh may re-read a known device after the device answered
 /// its ping (see [`refresh_features`]).
