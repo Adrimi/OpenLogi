@@ -586,6 +586,20 @@ impl InventoryWorker {
                     open_failures,
                     self.schedule.confirms_settings(trigger),
                 );
+                if let InventoryEvent::Snapshot {
+                    inventories,
+                    standalone,
+                    ..
+                } = &event
+                {
+                    self.schedule.set_offline_devices(
+                        inventories
+                            .iter()
+                            .flat_map(|inventory| &inventory.paired)
+                            .any(|device| !device.online)
+                            || standalone.iter().any(|device| !device.online),
+                    );
+                }
                 let needs_repair = self.enumerator.retry_needed_last_tick()
                     || standalone_failed
                     || self.state.raw_nodes.has_pending_misses();

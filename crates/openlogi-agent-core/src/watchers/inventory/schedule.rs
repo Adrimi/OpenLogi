@@ -36,6 +36,14 @@ const RECOVERY_WAKE_MARGIN: Duration = Duration::from_secs(1);
 pub(super) const RECOVERY_SCAN_PERIOD: Duration =
     PROBE_CACHE_FRESHNESS.saturating_sub(RECOVERY_WAKE_MARGIN);
 
+/// Recovery cadence while a known device is offline.
+///
+/// A sleeping or switched-off device raises no hotplug or HID++ event when it
+/// wakes, so only a scan can notice it. The scan is cheap — the probe cache
+/// stays fresh through [`PROBE_CACHE_FRESHNESS`] — and the cadence returns to
+/// [`RECOVERY_SCAN_PERIOD`] as soon as every known device is online.
+pub(super) const OFFLINE_RECOVERY_PERIOD: Duration = Duration::from_secs(30);
+
 /// Wall-clock lead over monotonic time that means the monotonic clock paused
 /// during system sleep. NTP false positives only cause harmless re-apply.
 const WAKE_GAP: Duration = Duration::from_mins(1);
@@ -103,6 +111,7 @@ pub(super) struct Schedule {
     confirmation: Option<Confirmation>,
     recovery_due: Instant,
     retry_count: u8,
+    offline_devices: bool,
 }
 
 impl Schedule {
@@ -112,7 +121,14 @@ impl Schedule {
             confirmation: None,
             recovery_due: now + RECOVERY_SCAN_PERIOD,
             retry_count: 0,
+            offline_devices: false,
         }
+    }
+
+    /// Record whether the snapshot about to be acknowledged lists a known
+    /// device that is offline, which shortens the next recovery scan.
+    pub(super) fn set_offline_devices(&mut self, offline: bool) {
+        self.offline_devices = offline;
     }
 
     /// Next deadline and its purpose.
@@ -174,7 +190,12 @@ impl Schedule {
             }
             (false, ScanOutcome::Failed) => {}
         }
-        self.recovery_due = clock.started + RECOVERY_SCAN_PERIOD;
+        self.recovery_due = clock.started
+            + if self.offline_devices {
+                OFFLINE_RECOVERY_PERIOD
+            } else {
+                RECOVERY_SCAN_PERIOD
+            };
 
         if !matches!(
             trigger,
@@ -260,6 +281,33 @@ mod tests {
 
         assert!(schedule.retry_due.is_none());
         assert_eq!(schedule.retry_count, FAST_RETRY_LIMIT);
+    }
+
+    #[test]
+    fn an_offline_device_shortens_the_recovery_scan_until_it_returns() {
+        let start = Instant::now();
+        let mut schedule = Schedule::new(start);
+        let healthy = ScanOutcome::Snapshot {
+            needs_repair: false,
+        };
+
+        schedule.set_offline_devices(true);
+        schedule.scan_finished(ReconcileTrigger::Initial, healthy, closed(start));
+        assert_eq!(
+            schedule.next_deadline(),
+            (
+                start + OFFLINE_RECOVERY_PERIOD,
+                DeadlinePurpose::RecoveryScan
+            )
+        );
+
+        let later = start + OFFLINE_RECOVERY_PERIOD;
+        schedule.set_offline_devices(false);
+        schedule.scan_finished(ReconcileTrigger::RecoveryScan, healthy, closed(later));
+        assert_eq!(
+            schedule.next_deadline(),
+            (later + RECOVERY_SCAN_PERIOD, DeadlinePurpose::RecoveryScan)
+        );
     }
 
     #[test]
