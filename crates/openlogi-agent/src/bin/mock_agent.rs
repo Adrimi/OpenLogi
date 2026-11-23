@@ -63,7 +63,10 @@ use openlogi_core::device::{
     BatteryInfo, BatteryLevel, BatteryStatus, Capabilities, DeviceInventory, DeviceKind, LockKey,
     PairedDevice, StandaloneDevice, prettify_codename,
 };
-use openlogi_core::hid::{DisableKeysMask, DisableKeysState, HidppOperation};
+use openlogi_core::hid::{
+    DisableKeysMask, DisableKeysState, HidppOperation, MouseSettings, MouseSettingsChange,
+    NO_ONBOARD_STAGES_FEATURE, OnboardDpiStages, OnboardDpiStagesChange,
+};
 use openlogi_core::single_instance::{self, InstanceError, Role};
 use openlogi_fixture::{DeviceProfile, FixtureError, ProfileDeviceSettings, ProfileSetting};
 use openlogi_hid::{
@@ -831,6 +834,14 @@ struct Target {
     paired: bool,
 }
 
+/// No fixture profile carries onboard DPI stages or mouse settings, so the
+/// mock answers as a HID++ mouse does.
+fn no_onboard_stages() -> WriteError {
+    WriteError::FeatureUnsupported {
+        feature_hex: NO_ONBOARD_STAGES_FEATURE,
+    }
+}
+
 fn profile_value<'a, T>(
     setting: &'a ProfileSetting<T>,
     route: &DeviceRoute,
@@ -1432,6 +1443,40 @@ impl Agent for MockAgent {
 
     async fn request_accessibility_prompt(self, _: Context) {
         info!("request_accessibility_prompt (no-op in the mock)");
+    }
+
+    async fn read_onboard_dpi_stages(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        Err(no_onboard_stages())
+    }
+
+    async fn set_onboard_dpi_stages(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+        _change: OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        Err(no_onboard_stages())
+    }
+
+    async fn read_mouse_settings(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        Err(no_onboard_stages())
+    }
+
+    async fn set_mouse_settings(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+        _change: MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        Err(no_onboard_stages())
     }
 
     async fn request_input_monitoring_access(self, _: Context) {

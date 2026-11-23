@@ -38,6 +38,8 @@ fn device_identity_roundtrips_and_is_iterable() {
             m_keys: false,
             macro_record: false,
             change_host: false,
+            onboard_dpi_stages: false,
+            mouse_settings: false,
         },
         light_capabilities: None,
         driver_id: None,
@@ -130,4 +132,30 @@ fn persisted_identity_strips_per_unit_identifiers() {
         .expect("model info");
     assert_eq!(model.serial_number, None);
     assert_eq!(model.unit_id, [0; 4]);
+}
+
+#[test]
+fn a_capabilities_table_keeps_accepting_the_compx_fields_beside_the_upstream_ones() {
+    use crate::device::Capabilities;
+
+    let required = "buttons = true\npointer = true\nlighting = false\nscroll_inversion = false\n\
+         hires_wheel = true\nthumbwheel = false\nhaptic_feedback = false\n\
+         haptic_panel = false\ndpi_gestures = true\nfn_lock = false\nos_layout = false\n\
+         report_rate = false\nbacklight = false\n";
+    let table = format!(
+        "{required}onboard_profiles = false\nbutton_spy = false\nsidetone = false\n\
+         g_keys = false\nm_keys = false\nmacro_record = false\nchange_host = false\n\
+         onboard_dpi_stages = true\nmouse_settings = true\n"
+    );
+    let parsed: Capabilities = toml::from_str(&table).expect("a table with every field parses");
+    assert!(parsed.onboard_dpi_stages && parsed.mouse_settings);
+    assert!(parsed.buttons && parsed.pointer && !parsed.onboard_profiles);
+
+    let older = format!("{required}onboard_dpi_stages = false\nmouse_settings = false\n");
+    let parsed: Capabilities = toml::from_str(&older).expect("the fork's own table parses");
+    assert!(!parsed.onboard_dpi_stages && !parsed.mouse_settings);
+
+    let roundtrip: Capabilities =
+        toml::from_str(&toml::to_string(&parsed).expect("serializes")).expect("parses back");
+    assert_eq!(roundtrip, parsed);
 }

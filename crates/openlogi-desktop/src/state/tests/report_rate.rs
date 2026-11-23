@@ -228,6 +228,34 @@ fn the_mouses_answer_repaints_the_pointer_card_either_way(cx: &mut gpui::TestApp
     );
 }
 
+#[gpui::test]
+fn an_unanswered_write_flags_the_mouse_until_a_write_lands(cx: &mut gpui::TestAppContext) {
+    let (state, mut receiver) = mouse_state(true);
+    let key = state.current_record().expect("mouse").device_key();
+    install(state, cx);
+    let route = answer_rate_read(&mut receiver, &info(1000, &[125, 500, 1000]));
+    cx.run_until_parked();
+    let unresponsive = |cx: &gpui::TestAppContext| {
+        cx.read(|cx| {
+            AppState::try_read(cx)
+                .expect("state installed")
+                .current_mouse_unresponsive()
+        })
+    };
+
+    let _ = written(cx, &key, &route, Err(WriteError::RawDeviceUnresponsive));
+    assert!(unresponsive(cx));
+
+    let _ = written(cx, &key, &route, Err(WriteError::AgentUnavailable));
+    assert!(
+        unresponsive(cx),
+        "an unrelated failure leaves the hint alone"
+    );
+
+    let _ = written(cx, &key, &route, Ok(info(500, &[125, 500, 1000])));
+    assert!(!unresponsive(cx));
+}
+
 #[test]
 fn an_answer_no_read_is_on_is_dropped() {
     let (mut state, _receiver) = mouse_state(true);

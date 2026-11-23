@@ -247,6 +247,17 @@ pub struct Capabilities {
     /// identity.
     #[serde(default)]
     pub change_host: bool,
+    /// The mouse stores its own DPI stages, which its DPI button steps
+    /// through and its LED colours, and software can read and replace them
+    /// (the Compx family). Appended after `disable_keys`: crosses the IPC and
+    /// the persisted identity.
+    #[serde(default)]
+    pub onboard_dpi_stages: bool,
+    /// The mouse stores sensor, timing and lighting settings of its own that
+    /// software can read and change (the Compx family). Appended after
+    /// `onboard_dpi_stages`: crosses the IPC and the persisted identity.
+    #[serde(default)]
+    pub mouse_settings: bool,
 }
 
 impl Capabilities {
@@ -307,6 +318,8 @@ impl Capabilities {
             m_keys: ids.contains(&0x8020),
             macro_record: ids.contains(&0x8030),
             change_host: ids.contains(&0x1814),
+            onboard_dpi_stages: false,
+            mouse_settings: false,
         }
     }
 
@@ -752,6 +765,13 @@ pub struct StandaloneDevice {
     /// append-only GUI↔agent bincode wire format.
     #[serde(default)]
     pub registry_model_id: Option<String>,
+    /// Last battery reading for a driver that reports one (Compx mice);
+    /// `None` when the device has no battery or did not answer.
+    ///
+    /// Appended for the same append-only wire contract as
+    /// [`Self::registry_model_id`].
+    #[serde(default)]
+    pub battery: Option<BatteryInfo>,
 }
 
 impl StandaloneDevice {
@@ -937,6 +957,8 @@ mod tests {
                     m_keys: false,
                     macro_record: false,
                     change_host: false,
+                    onboard_dpi_stages: false,
+                    mouse_settings: false,
                 }),
                 settings_revision: 0,
                 hidpp10: false,
@@ -1066,6 +1088,8 @@ mod tests {
                 m_keys: false,
                 macro_record: false,
                 change_host: false,
+                onboard_dpi_stages: false,
+                mouse_settings: false,
             }
         );
         assert!(!Capabilities::from_feature_ids(&[0x0003, 0x1b04]).thumbwheel);
@@ -1099,6 +1123,8 @@ mod tests {
                 m_keys: false,
                 macro_record: false,
                 change_host: false,
+                onboard_dpi_stages: false,
+                mouse_settings: false,
             }
         );
         // A G713: the gaming-key features and onboard profiles, no

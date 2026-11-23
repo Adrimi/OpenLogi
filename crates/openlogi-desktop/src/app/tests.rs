@@ -1,4 +1,6 @@
-use super::home::{ConnectionGlyph, connection_glyph, ordered_device_indices};
+use super::home::{
+    ConnectionGlyph, PlaceholderArt, connection_glyph, ordered_device_indices, placeholder_art,
+};
 use super::{DetailTab, DeviceKind, DeviceRecord};
 use crate::services::assets::ResolvedAsset;
 use crate::state::{Link, Presence};
@@ -1317,6 +1319,8 @@ fn tabs_prefer_buttons_when_a_keyboard_kind_measures_a_pointer() {
         m_keys: false,
         macro_record: false,
         change_host: false,
+        onboard_dpi_stages: false,
+        mouse_settings: false,
     });
     let tabs = DetailTab::tabs_for(&record(DeviceKind::Keyboard, caps));
     assert!(
@@ -1360,6 +1364,8 @@ fn tabs_follow_capabilities_not_kind() {
         m_keys: false,
         macro_record: false,
         change_host: false,
+        onboard_dpi_stages: false,
+        mouse_settings: false,
     });
     // After 0x0005 kind-correction the record has kind=Mouse, not Keyboard.
     let tabs = DetailTab::tabs_for(&record(DeviceKind::Mouse, caps));
@@ -1450,6 +1456,8 @@ fn keyboard_without_asset_hides_buttons_tab() {
         m_keys: false,
         macro_record: false,
         change_host: false,
+        onboard_dpi_stages: false,
+        mouse_settings: false,
     });
     let tabs = DetailTab::tabs_for(&record(DeviceKind::Keyboard, caps));
     assert!(
@@ -1487,6 +1495,8 @@ fn keyboard_with_buttons_shows_keys_tab() {
         m_keys: false,
         macro_record: false,
         change_host: false,
+        onboard_dpi_stages: false,
+        mouse_settings: false,
     });
     let keyboard = record(DeviceKind::Keyboard, caps);
     let tabs = DetailTab::tabs_for(&keyboard);
@@ -2174,4 +2184,13 @@ fn a_gaming_keyboard_gets_no_keys_or_mouse_tabs() {
     assert!(!tabs.contains(&DetailTab::Keys));
     assert!(!tabs.contains(&DetailTab::Buttons) && !tabs.contains(&DetailTab::ActionsRing));
     assert!(tabs.contains(&DetailTab::Lighting));
+}
+
+#[test]
+fn mice_get_the_mouse_illustration_and_other_kinds_keep_their_glyph() {
+    for kind in [DeviceKind::Mouse, DeviceKind::Trackball] {
+        assert_eq!(placeholder_art(kind), PlaceholderArt::MouseIllustration);
+    }
+    assert_eq!(placeholder_art(DeviceKind::Keyboard), PlaceholderArt::Chip);
+    assert_eq!(placeholder_art(DeviceKind::Camera), PlaceholderArt::Camera);
 }

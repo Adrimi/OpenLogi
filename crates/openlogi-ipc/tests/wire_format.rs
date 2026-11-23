@@ -37,6 +37,7 @@ use openlogi_core::binding::{
     Action, ActionRingIcon, ActionRingSize, ActionRingSlot, ButtonId, GKey, GKeyProfile, GKeySlot,
     GridKey, GridSlot, KeyCombo, KeypadPage, ModeKey,
 };
+use openlogi_core::color::Rgb;
 use openlogi_core::config::{
     ConfigRevision, FlowPeerName, FlowPublicKey, Lighting, ScrollResolution,
 };
@@ -49,7 +50,8 @@ use openlogi_core::hid::{
     BacklightChange, BacklightControls, BacklightDuration, BacklightMode, BacklightState,
     BacklightStatus, Click, DeviceRoute, DisableKeysMask, DisableKeysState, Dpi, DpiCapabilities,
     DpiInfo, EasySwitchHosts, EasySwitchSlot, FnLockState, ForceSensingInfo, HidppFeatureErrorKind,
-    HidppOperation, HostConnection, HostOsInfo, HostOsKind, LightCommand, OnboardMode,
+    HidppOperation, HostConnection, HostOsInfo, HostOsKind, LightCommand, MouseSettings,
+    MouseSettingsChange, OnboardDpiStage, OnboardDpiStages, OnboardDpiStagesChange, OnboardMode,
     OnboardProfile, OnboardState, PasskeyMethod, ProfileIndex, ReceiverSelector, ReportRate,
     ReportRateInfo, ScrollReportingTarget, ScrollWheelMode, SidetoneLevel, SmartShiftAutoDisengage,
     SmartShiftMode, SmartShiftStatus, SmartShiftThreshold, TunableTorque, WriteError,
@@ -119,7 +121,7 @@ fn representative_smartshift_status() -> SmartShiftStatus {
 /// unreleased version and leave this pin alone (`crates/openlogi-ipc/AGENTS.md`).
 #[test]
 fn protocol_version_is_pinned() {
-    assert_eq!(PROTOCOL_VERSION, 47);
+    assert_eq!(PROTOCOL_VERSION, 48);
 }
 
 #[test]
@@ -981,6 +983,8 @@ fn device_inventory() {
                 m_keys: false,
                 macro_record: false,
                 change_host: false,
+                onboard_dpi_stages: true,
+                mouse_settings: true,
             }),
             settings_revision: 7,
             hidpp10: false,
@@ -988,7 +992,7 @@ fn device_inventory() {
     }];
     assert_wire(
         &inventory,
-        "010d426f6c74205265636569766572fb6d04fb48c501084630304443414645010101094d58204d535452335301fb34b00001010150020001030106323134304c5a0102030400010100fb34b0fb8240000b01010100000101010101000101010101010100000001000000000700",
+        "010d426f6c74205265636569766572fb6d04fb48c501084630304443414645010101094d58204d535452335301fb34b00001010150020001030106323134304c5a0102030400010100fb34b0fb8240000b010101000001010101010001010101010101000000010000000001010700",
     );
 }
 
@@ -1281,17 +1285,18 @@ fn standalone_light_dtos_commands_and_errors() {
         light_capabilities: Some(capabilities),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     };
 
     assert_wire(
         &standalone,
-        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c6974726101053863393030",
+        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c697472610105386339303000",
     );
     let mut legacy = standalone.clone();
     legacy.registry_model_id = None;
     assert_wire(
         &legacy,
-        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c6974726100",
+        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c697472610000",
     );
     assert_wire(&capabilities, "010114fa010101fb8c0afb641964020000");
     assert_wire(&brightness, "14fa0101");
@@ -1520,6 +1525,12 @@ fn force_sensing_dtos_and_errors() {
 }
 
 #[test]
+fn raw_device_errors_are_appended() {
+    assert_wire(&WriteError::RawDeviceUnresponsive, "20");
+    assert_wire(&WriteError::RawDeviceProtocol("bad".into()), "2103626164");
+}
+
+#[test]
 fn disable_keys_requests_are_appended() {
     let route = DeviceRoute::Bolt {
         receiver_uid: "F00DCAFE".into(),
@@ -1538,4 +1549,115 @@ fn disable_keys_requests_are_appended() {
         },
         "2d000846303044434146450101",
     );
+}
+
+#[test]
+fn onboard_dpi_stages_are_appended() {
+    let route = DeviceRoute::Bolt {
+        receiver_uid: "F00DCAFE".into(),
+        slot: 1,
+    };
+    let stages = vec![
+        OnboardDpiStage {
+            dpi: Dpi::new(800),
+            color: Rgb::new(0xff, 0, 0),
+        },
+        OnboardDpiStage {
+            dpi: Dpi::new(1600),
+            color: Rgb::new(0xff, 0x80, 0),
+        },
+    ];
+    assert_wire(
+        &AgentRequest::ReadOnboardDpiStages {
+            route: route.clone(),
+        },
+        "3b0008463030444341464501",
+    );
+    let change = OnboardDpiStagesChange {
+        stages: stages.clone(),
+        active: 1,
+    };
+    assert_wire(
+        &AgentRequest::SetOnboardDpiStages { route, change },
+        "3c000846303044434146450102fb200306666630303030fb40060666663830303001",
+    );
+    let read_back = OnboardDpiStages {
+        stages,
+        active: 1,
+        max_stages: 8,
+    };
+    assert_wire(&read_back, "02fb200306666630303030fb4006066666383030300108");
+    assert_wire(
+        &Ok::<OnboardDpiStages, WriteError>(read_back),
+        "0002fb200306666630303030fb4006066666383030300108",
+    );
+    assert_wire(&WriteError::OnboardDpiStagesNotApplied, "22");
+}
+
+#[test]
+fn mouse_settings_are_appended() {
+    use openlogi_core::color::Rgb;
+    use openlogi_core::hid::{
+        AngleAdjustment, BodyLight, BodyLightMode, ButtonDebounce, DpiLed, DpiLedEffect,
+        IdleTimeout, Level, LiftOffDistance, SensorMode, SensorSwitch, SensorSwitches,
+        WheelDebounce,
+    };
+
+    let route = DeviceRoute::Bolt {
+        receiver_uid: "F00DCAFE".into(),
+        slot: 1,
+    };
+    assert_wire(
+        &AgentRequest::ReadMouseSettings {
+            route: route.clone(),
+        },
+        "3d0008463030444341464501",
+    );
+    assert_wire(
+        &AgentRequest::SetMouseSettings {
+            route: route.clone(),
+            change: MouseSettingsChange::Switch {
+                switch: SensorSwitch::RippleControl,
+                on: true,
+            },
+        },
+        "3e0008463030444341464501020201",
+    );
+    let light = BodyLight {
+        mode: BodyLightMode::Rainbow,
+        color: Rgb::new(0xff, 0, 0xff),
+        speed: Level::new(8).expect("level"),
+        brightness: Level::MAX,
+        enabled: false,
+        off_while_moving: false,
+    };
+    let settings = MouseSettings {
+        lift_off: LiftOffDistance::Mm1,
+        sensor_mode: SensorMode::HighPerformance,
+        switches: SensorSwitches::default().with(SensorSwitch::MotionSync, true),
+        angle_adjustment: AngleAdjustment::new(-5).expect("angle"),
+        idle_timeout: IdleTimeout::Minutes1,
+        button_debounce: ButtonDebounce::new(8).expect("debounce"),
+        wheel_debounce: Some(WheelDebounce::new(60).expect("debounce")),
+        dpi_led: DpiLed {
+            effect: DpiLedEffect::Breathing,
+            brightness: Level::MAX,
+            speed: Level::new(3).expect("level"),
+            enabled: false,
+        },
+        body_light: light,
+    };
+    assert_wire(
+        &settings,
+        "010101fb0208013c010a03000106666630306666080a0000",
+    );
+    assert_wire(
+        &Ok::<MouseSettings, WriteError>(settings),
+        "00010101fb0208013c010a03000106666630306666080a0000",
+    );
+    assert_wire(
+        &MouseSettingsChange::BodyLight(light),
+        "080106666630306666080a0000",
+    );
+    assert_wire(&WriteError::MouseSettingNotApplied, "23");
 }

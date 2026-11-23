@@ -6169,6 +6169,7 @@ version = "0.9.0"
 dependencies = [
  "futures-concurrency",
  "futures-lite",
+ "num_enum",
  "openlogi-core",
  "openlogi-device-registry",
  "openlogi-fixture",

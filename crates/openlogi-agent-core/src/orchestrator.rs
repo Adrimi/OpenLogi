@@ -28,6 +28,10 @@ use openlogi_core::device::{
     LightState, StandaloneDevice, prettify_codename,
 };
 use openlogi_core::device_order::{DeviceIdentity, DeviceStableId, PhysicalDeviceKey};
+use openlogi_core::hid::{
+    MouseSettings, MouseSettingsChange, NO_ONBOARD_STAGES_FEATURE, OnboardDpiStages,
+    OnboardDpiStagesChange,
+};
 use openlogi_hid::{
     BacklightChange, BacklightState, CaptureChannelSlot, ChannelPool, ChannelRegistry,
     DeviceIoGate, DeviceRoute, DisableKeysMask, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
@@ -320,6 +324,9 @@ impl SharedHandles {
 
     /// Read the DPI and the DPI values of the mouse at `route`.
     pub async fn read_dpi(&self, route: &DeviceRoute) -> Result<DpiInfo, WriteError> {
+        if let Some(info) = self.read_raw_dpi(route).await {
+            return info;
+        }
         self.device(route)
             .run(HidppOperation::ReadDpiCapabilities, |c| async move {
                 openlogi_hid::get_dpi_info_on(&c).await
@@ -332,6 +339,14 @@ impl SharedHandles {
         &self,
         route: &DeviceRoute,
     ) -> Result<SmartShiftStatus, WriteError> {
+        // A Compx mouse has no SmartShift wheel. Answer as a HID++ mouse
+        // without `0x2110` does, so the settings app shows it as unsupported
+        // instead of retrying a read no channel can serve.
+        if openlogi_hid::compx::is_compx_route(route) {
+            return Err(WriteError::FeatureUnsupported {
+                feature_hex: 0x2110,
+            });
+        }
         self.device(route)
             .run(HidppOperation::ReadSmartShift, |c| async move {
                 openlogi_hid::get_smartshift_status_on(&c).await
@@ -365,6 +380,88 @@ impl SharedHandles {
             .await
     }
 
+    /// The DPI of the raw-HID mouse at `route`, when a raw driver owns it;
+    /// `None` for a route the HID++ layer serves.
+    pub async fn read_raw_dpi(&self, route: &DeviceRoute) -> Option<Result<DpiInfo, WriteError>> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            Some(self.hardware.compx_dpi_info(route).await)
+        } else {
+            None
+        }
+    }
+
+    /// The DPI stages stored on the mouse at `route`. Only a Compx mouse
+    /// stores them; any other route answers
+    /// [`WriteError::FeatureUnsupported`], which the settings app treats as
+    /// permanent.
+    pub async fn read_onboard_dpi_stages(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_stages(route).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// Replace the DPI stages stored on the mouse at `route` and return what
+    /// it reads back; [`WriteError::FeatureUnsupported`] for any route but a
+    /// Compx mouse.
+    pub async fn set_onboard_dpi_stages(
+        &self,
+        route: &DeviceRoute,
+        change: &OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_set_stages(route, change).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// The sensor, timing and lighting settings stored on the mouse at
+    /// `route`. Only a Compx mouse stores them; any other route answers
+    /// [`WriteError::FeatureUnsupported`].
+    pub async fn read_mouse_settings(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_settings(route).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// Apply `change` to the settings stored on the mouse at `route` and
+    /// return what it reads back; [`WriteError::FeatureUnsupported`] for any
+    /// route but a Compx mouse.
+    pub async fn set_mouse_settings(
+        &self,
+        route: &DeviceRoute,
+        change: &MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            self.hardware.compx_set_settings(route, change).await
+        } else {
+            Err(no_onboard_stages())
+        }
+    }
+
+    /// The report rate of the raw-HID mouse at `route`, when a raw driver
+    /// owns it; `None` for a route the HID++ layer serves.
+    pub async fn read_raw_report_rate(
+        &self,
+        route: &DeviceRoute,
+    ) -> Option<Result<ReportRateInfo, WriteError>> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            Some(self.hardware.compx_report_rate_info(route).await)
+        } else {
+            None
+        }
+    }
+
     /// Write `rate` to the mouse at `route` and return what it reads back.
     /// When a newer report-rate write for the mouse is requested before this
     /// one gets its turn, this one reads the mouse instead of writing a rate
@@ -377,6 +474,9 @@ impl SharedHandles {
         route: &DeviceRoute,
         rate: ReportRate,
     ) -> Result<ReportRateInfo, WriteError> {
+        if openlogi_hid::compx::is_compx_route(route) {
+            return self.hardware.compx_set_report_rate(route, rate).await;
+        }
         let ticket = self.report_rate_order.request(route);
         self.device(route)
             .run_in_turn(
@@ -477,6 +577,11 @@ impl SharedHandles {
     /// nothing and answers [`WriteError::WriteSuperseded`], so its caller
     /// saves nothing: the newer write decides the DPI.
     pub async fn set_dpi(&self, route: &DeviceRoute, dpi: Dpi) -> Result<(), WriteError> {
+        // A Compx mouse has no HID++ channel and no precision mode; its DPI
+        // lives in its configuration flash.
+        if openlogi_hid::compx::is_compx_route(route) {
+            return self.hardware.compx_set_dpi(route, dpi).await;
+        }
         let AppWrite { ticket, restore } = self
             .pointer_speeds
             .app_write(route, SavedSpeed::Dpi(Some(dpi)));
@@ -2765,6 +2870,12 @@ fn publish_arc_if_changed<T: PartialEq>(publication: &watch::Sender<Arc<T>>, val
         *current = Arc::new(value);
         true
     });
+}
+
+fn no_onboard_stages() -> WriteError {
+    WriteError::FeatureUnsupported {
+        feature_hex: NO_ONBOARD_STAGES_FEATURE,
+    }
 }
 
 #[cfg(test)]

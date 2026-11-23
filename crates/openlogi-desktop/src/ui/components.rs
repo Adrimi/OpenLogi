@@ -329,7 +329,6 @@ impl RenderOnce for PanelCard {
         let pal = theme::palette(cx);
         div()
             .w_full()
-            .when(self.fill, gpui::Styled::h_full)
             .max_w_full()
             .min_w_0()
             .rounded(pal.card_radius)

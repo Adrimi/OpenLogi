@@ -44,7 +44,8 @@ use std::time::{Duration, Instant};
 
 use openlogi_core::hid::{
     BacklightState, DeviceRoute, DisableKeysState, Dpi, EasySwitchHosts, FnLockState,
-    ForceSensingInfo, LightCommand, PointerSpeed, ReportRateInfo, SidetoneLevel, WriteError,
+    ForceSensingInfo, LightCommand, MouseSettings, OnboardDpiStages, PointerSpeed, ReportRateInfo,
+    SidetoneLevel, WriteError,
 };
 use openlogi_ipc::client::{self, ConnectError};
 use openlogi_ipc::{
@@ -73,11 +74,12 @@ pub use request::PollEventMonitor;
 pub use request::{
     CancelFlowPairing, CancelPairing, Command, ConfirmFlowPairing, LoadConfig, PairDevice,
     PairFlowPeer, ReadBacklight, ReadDisableKeys, ReadDpi, ReadEasySwitchHosts, ReadFnLock,
-    ReadForceSensing, ReadOnboard, ReadPointerSpeed, ReadReportRate, ReadSidetone, ReadSmartShift,
-    ReloadConfig, RenameEasySwitchHost, RequestAccessibilityPrompt, RequestInputMonitoringAccess,
-    RetryConnection, SetBacklight, SetDisableKeys, SetDpi, SetFnLock, SetForceSensing, SetLight,
-    SetLightManualPower, SetLighting, SetPointerSpeed, SetReportRate, SetSidetone, SetSmartShift,
-    StartFlowPairing, StartPairing, StopFlowPairing, UnpairDevice,
+    ReadForceSensing, ReadMouseSettings, ReadOnboard, ReadOnboardDpiStages, ReadPointerSpeed,
+    ReadReportRate, ReadSidetone, ReadSmartShift, ReloadConfig, RenameEasySwitchHost,
+    RequestAccessibilityPrompt, RequestInputMonitoringAccess, RetryConnection, SetBacklight,
+    SetDisableKeys, SetDpi, SetFnLock, SetForceSensing, SetLight, SetLightManualPower, SetLighting,
+    SetMouseSettings, SetOnboardDpiStages, SetPointerSpeed, SetReportRate, SetSidetone,
+    SetSmartShift, StartFlowPairing, StartPairing, StopFlowPairing, UnpairDevice,
 };
 
 /// Complete identity of one Disable Keys write/reload transaction.
@@ -179,6 +181,38 @@ pub enum GuiUpdate {
         route: DeviceRoute,
         /// The read-back, or why the write did not land.
         result: Result<ReportRateInfo, WriteError>,
+    },
+    /// The DPI stages a mouse stores, as it answered a read the GUI asked
+    /// for. Answers [`ReadOnboardDpiStages`].
+    OnboardDpiStagesRead {
+        /// The mouse that was read.
+        key: DeviceKey,
+        /// The stored stages, or why the read did not land.
+        result: Result<OnboardDpiStages, WriteError>,
+    },
+    /// What a mouse reports after a DPI-stage write the GUI asked for: the
+    /// stages it kept, or the typed refusal. Answers [`SetOnboardDpiStages`].
+    OnboardDpiStagesWritten {
+        /// The mouse that was written.
+        key: DeviceKey,
+        /// The read-back, or why the write did not land.
+        result: Result<OnboardDpiStages, WriteError>,
+    },
+    /// The settings a mouse stores, as it answered a read the GUI asked for.
+    /// Answers [`ReadMouseSettings`].
+    MouseSettingsRead {
+        /// The mouse that was read.
+        key: DeviceKey,
+        /// The stored settings, or why the read did not land.
+        result: Result<MouseSettings, WriteError>,
+    },
+    /// What a mouse reports after a settings write the GUI asked for: the
+    /// settings it kept, or the typed refusal. Answers [`SetMouseSettings`].
+    MouseSettingsWritten {
+        /// The mouse that was written.
+        key: DeviceKey,
+        /// The read-back, or why the write did not land.
+        result: Result<MouseSettings, WriteError>,
     },
     /// What a mouse reports after a pointer-speed write the GUI asked for:
     /// the speed it took, or the typed refusal. Answers [`SetPointerSpeed`].

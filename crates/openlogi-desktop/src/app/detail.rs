@@ -35,11 +35,12 @@ use crate::features::lighting::visual as light_visual;
 use crate::features::mouse::view::MouseModelView;
 use crate::features::pointer::dpi::DpiPanel;
 use crate::features::pointer::momentum::{MomentumPanel, confirm_turning_off_with_smooth_wheel};
+use crate::features::pointer::mouse_settings::{MouseSettingsFacts, lighting_card, sensor_card};
 use crate::features::pointer::smartshift::SmartShiftPanel;
 use crate::features::profiles::{
     AppCatalogPicker, ProfileIconCache, action_ring_profile_scope_bar, button_profile_scope_bar,
 };
-use crate::state::{AppState, BindingLayer, DeviceRecord, Load, StateEvents};
+use crate::state::{AppState, BindingLayer, DeviceRecord, Load, SmartShiftLoad, StateEvents};
 use crate::ui::battery::BatteryIndicator;
 use crate::ui::components::{PanelCard, Toggle, toggle_row};
 use crate::ui::theme::{
@@ -420,6 +421,21 @@ fn pointer_tab(
     cx: &mut Context<AppView>,
 ) -> impl IntoElement {
     let pal = theme::palette(cx);
+    let show_smartshift = AppState::try_read(cx)
+        .and_then(|state| {
+            let key = state.current_record()?.device_key();
+            Some(smartshift_card_visible(&state.smartshift_load_for(&key)))
+        })
+        .unwrap_or(true);
+    let smartshift_card = show_smartshift.then(|| {
+        PanelCard::new(
+            tr!("pointer.smartshift"),
+            Icon::empty().path("action-icons/refresh-cw.svg"),
+            smartshift_panel.clone().into_any_element(),
+        )
+        .fill()
+    });
+    let settings = MouseSettingsFacts::current(cx);
     tab_body(
         DetailTab::Pointer,
         ContentWidth::Large,
@@ -436,14 +452,7 @@ fn pointer_tab(
                 )
                 .fill(),
             ))
-            .child(pointer_grid_card(
-                PanelCard::new(
-                    tr!("pointer.smartshift"),
-                    Icon::empty().path("action-icons/refresh-cw.svg"),
-                    smartshift_panel.clone().into_any_element(),
-                )
-                .fill(),
-            ))
+            .children(smartshift_card.map(pointer_grid_card))
             .child(
                 div()
                     .min_w(POINTER_CARD_MIN_W)
@@ -451,6 +460,12 @@ fn pointer_tab(
                     .child(scrolling_card(pal, cx)),
             )
             .children(onboard_card(pal, cx).map(pointer_grid_card))
+            .children(
+                sensor_card(settings.as_ref(), pal).map(|card| pointer_grid_card(card.fill())),
+            )
+            .children(
+                lighting_card(settings.as_ref(), pal).map(|card| pointer_grid_card(card.fill())),
+            )
             // Full width, so it always starts its own row at the bottom.
             .child(
                 div().w_full().child(
@@ -467,6 +482,34 @@ fn pointer_tab(
                 ),
             ),
     )
+}
+
+/// Whether the Pointer tab shows the SmartShift card. Only a read the device
+/// answered as unsupported hides it; an unread, loading or transiently failed
+/// read keeps the card so a device that does support SmartShift never
+/// flickers away.
+fn smartshift_card_visible(load: &SmartShiftLoad) -> bool {
+    !matches!(load, SmartShiftLoad::Unsupported(_))
+}
+
+/// Which optional rows the scrolling card shows. The inversion row is always
+/// there — it falls back to software inversion — so the card is never empty.
+#[derive(Debug, PartialEq, Eq)]
+struct ScrollingRows {
+    resolution: bool,
+    smooth_wheel: bool,
+}
+
+impl ScrollingRows {
+    /// A device with no hi-res wheel anywhere has neither control to offer;
+    /// a smooth wheel already on stays visible so it can be turned off.
+    fn for_wheel(hires: HiresWheel, smooth_wheel: bool) -> Self {
+        let wheel_known = hires != HiresWheel::Nowhere;
+        Self {
+            resolution: wheel_known,
+            smooth_wheel: wheel_known || smooth_wheel,
+        }
+    }
 }
 
 fn onboard_card(pal: Palette, cx: &mut Context<AppView>) -> Option<impl IntoElement> {
@@ -656,37 +699,19 @@ fn scrolling_card(pal: Palette, cx: &mut Context<AppView>) -> impl IntoElement {
     });
     let smooth_wheel = AppState::try_read(cx).is_some_and(AppState::current_smooth_wheel);
     let inversion_description = inversion_description(inversion_supported, inversion_is_software);
-    let inversion_row = h_flex()
-        .justify_between()
-        .items_center()
-        .gap_4()
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .text_body()
-                        .text_color(pal.text_primary)
-                        .child(tr!("pointer.invert_scroll_direction")),
-                )
-                .child(
-                    div()
-                        .text_caption()
-                        .text_color(pal.text_muted)
-                        .child(inversion_description),
-                ),
-        )
-        .child(
-            Toggle::new("invert-scroll-toggle")
-                .selected(inverted)
-                .disabled(!inversion_supported)
-                .accessibility_label(tr!("pointer.invert_scroll_direction"))
-                .label((!inversion_supported).then(|| tr!("common.unavailable")))
-                .on_change(|inverted, _window, cx| {
-                    AppState::apply(cx, |state| state.commit_invert_scroll(*inverted));
-                }),
-        );
+    let inversion_row = toggle_row(
+        "invert-scroll-row",
+        pal,
+        tr!("pointer.invert_scroll_direction"),
+        inversion_description,
+        Toggle::new("invert-scroll-toggle")
+            .selected(inverted)
+            .disabled(!inversion_supported)
+            .label((!inversion_supported).then(|| tr!("common.unavailable")))
+            .on_change(|inverted, _window, cx| {
+                AppState::apply(cx, |state| state.commit_invert_scroll(*inverted));
+            }),
+    );
     let resolution_description = match hires {
         HiresWheel::Here => match resolution {
             None => tr!("pointer.wheel_resolution_device_default_description"),
@@ -702,8 +727,11 @@ fn scrolling_card(pal: Palette, cx: &mut Context<AppView>) -> impl IntoElement {
     };
     let resolution_row = v_flex()
         .gap_2()
+        .w_full()
+        .min_w_0()
         .child(
             v_flex()
+                .min_w_0()
                 .child(
                     div()
                         .text_body()
@@ -722,14 +750,18 @@ fn scrolling_card(pal: Palette, cx: &mut Context<AppView>) -> impl IntoElement {
             hires == HiresWheel::Here,
             cx,
         ));
+    let rows = ScrollingRows::for_wheel(hires, smooth_wheel);
     PanelCard::new(
         tr!("pointer.scrolling"),
         Icon::empty().path("action-icons/mouse.svg"),
         v_flex()
             .gap_4()
             .child(inversion_row)
-            .child(resolution_row)
-            .child(smooth_wheel_row(pal, smooth_wheel, hires)),
+            .children(rows.resolution.then_some(resolution_row))
+            .children(
+                rows.smooth_wheel
+                    .then(|| smooth_wheel_row(pal, smooth_wheel, hires)),
+            ),
     )
 }
 
@@ -1287,10 +1319,12 @@ mod tests {
     use openlogi_core::config::{Config, MomentumScrolling};
 
     use super::{
-        HiresWheel, device_enabled_row, elided_key, smooth_wheel_caption, smooth_wheel_row,
+        HiresWheel, ScrollingRows, device_enabled_row, elided_key, smartshift_card_visible,
+        smooth_wheel_caption, smooth_wheel_row,
     };
     use crate::services::assets::AssetResolver;
     use crate::services::i18n::LOCALE_LOCK;
+    use crate::state::SmartShiftLoad;
     use crate::state::tests::{KNOWN_MOUSE_KEY, direct_inventory};
     use crate::state::{AppState, Sources};
     use crate::ui::theme;
@@ -1549,6 +1583,46 @@ mod tests {
         click_switch(cx);
         assert!(cx.update(WindowExt::has_active_dialog), "it asks");
         assert!(smooth_wheel_on(cx) && gliding(cx), "asked, not changed");
+    }
+
+    #[test]
+    fn only_an_unsupported_read_hides_the_smartshift_card() {
+        assert!(!smartshift_card_visible(&SmartShiftLoad::Unsupported(
+            "no feature".to_string()
+        )));
+        assert!(smartshift_card_visible(&SmartShiftLoad::Unknown));
+        assert!(smartshift_card_visible(&SmartShiftLoad::Loading));
+        assert!(smartshift_card_visible(&SmartShiftLoad::Failed(
+            "timeout".to_string()
+        )));
+    }
+
+    #[test]
+    fn the_scrolling_card_hides_wheel_rows_the_device_lacks() {
+        let shown = ScrollingRows {
+            resolution: true,
+            smooth_wheel: true,
+        };
+        assert_eq!(ScrollingRows::for_wheel(HiresWheel::Here, false), shown);
+        assert_eq!(
+            ScrollingRows::for_wheel(HiresWheel::Elsewhere, false),
+            shown
+        );
+        assert_eq!(
+            ScrollingRows::for_wheel(HiresWheel::Nowhere, false),
+            ScrollingRows {
+                resolution: false,
+                smooth_wheel: false,
+            }
+        );
+        assert_eq!(
+            ScrollingRows::for_wheel(HiresWheel::Nowhere, true),
+            ScrollingRows {
+                resolution: false,
+                smooth_wheel: true,
+            },
+            "a smooth wheel already on stays switchable"
+        );
     }
 
     #[test]

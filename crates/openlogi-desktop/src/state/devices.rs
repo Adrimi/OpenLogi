@@ -20,6 +20,7 @@ use tracing::debug;
 use super::device_key::DeviceKey;
 use super::device_session::ObservedConnection;
 use crate::services::assets::{AssetResolver, ResolvedAsset};
+use crate::services::known_devices;
 
 pub(super) mod presence;
 
@@ -250,12 +251,19 @@ impl super::AppState {
     }
 }
 
-/// The name a receiver-paired device is shown under: its asset's name, else
-/// its prettified codename, else its receiver slot number.
+/// The name a receiver-paired device is shown under: its asset's name, else a
+/// recognised third-party model, else its prettified codename, else its
+/// receiver slot number.
 fn paired_display_name(asset: Option<&ResolvedAsset>, paired: &PairedDevice) -> String {
+    let codename = paired.codename.as_deref();
     asset
         .map(|a| a.display_name.clone())
-        .or_else(|| paired.codename.as_deref().map(prettify_codename))
+        .or_else(|| {
+            codename
+                .and_then(known_devices::lookup)
+                .map(|known| known.name.to_string())
+        })
+        .or_else(|| codename.map(prettify_codename))
         .unwrap_or_else(|| {
             tr!("device.receiver_slot_number", number => paired.slot.to_string()).to_string()
         })
@@ -607,7 +615,7 @@ fn append_standalone(
             light_capabilities: device.light_capabilities,
             slot: openlogi_core::hid::DIRECT_DEVICE_INDEX,
             presence: Presence::listed(device.online),
-            battery: None,
+            battery: device.battery.clone(),
             settings_revision: 0,
             stale_pairings: Vec::new(),
         });

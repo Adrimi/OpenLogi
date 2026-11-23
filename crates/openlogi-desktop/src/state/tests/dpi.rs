@@ -486,3 +486,86 @@ fn a_probed_mouse_without_adjustable_dpi_is_not_read(cx: &mut gpui::TestAppConte
         (false, DpiLoad::Unknown)
     );
 }
+
+#[test]
+fn an_unanswered_write_flags_the_mouse_until_the_next_write_lands() {
+    let (mut state, mut receiver) = mouse_with_a_saved_dpi();
+    let key = mouse_key(&state);
+    assert!(!state.current_mouse_unresponsive());
+
+    let write = commit(&mut state, &mut receiver, Dpi::new(1600));
+    let events = state.apply_dpi_written(
+        &key,
+        write,
+        Dpi::new(1600),
+        Err(WriteError::RawDeviceUnresponsive),
+    );
+
+    assert_eq!(events, [StateEvent::DpiChanged(key.clone())]);
+    assert!(state.current_mouse_unresponsive());
+    assert_eq!(state.config.dpi(KNOWN_MOUSE_KEY), Some(SAVED));
+    assert_eq!(state.dpi(), SAVED, "the editor falls back as before");
+
+    let retry = commit(&mut state, &mut receiver, Dpi::new(1600));
+    assert!(
+        !state.current_mouse_unresponsive(),
+        "a retry clears the message"
+    );
+    let _ = state.apply_dpi_written(
+        &key,
+        retry,
+        Dpi::new(1600),
+        Err(WriteError::RawDeviceUnresponsive),
+    );
+    assert!(state.current_mouse_unresponsive());
+
+    let landed = commit(&mut state, &mut receiver, Dpi::new(2400));
+    let _ = state.apply_dpi_written(&key, landed, Dpi::new(2400), Ok(()));
+    assert!(!state.current_mouse_unresponsive());
+    assert_eq!(state.config.dpi(KNOWN_MOUSE_KEY), Some(Dpi::new(2400)));
+}
+
+#[test]
+fn another_failed_write_does_not_flag_the_mouse() {
+    let (mut state, mut receiver) = mouse_with_a_saved_dpi();
+    let key = mouse_key(&state);
+    let write = commit(&mut state, &mut receiver, Dpi::new(1600));
+
+    let _ = state.apply_dpi_written(
+        &key,
+        write,
+        Dpi::new(1600),
+        Err(WriteError::DeviceUnreachable { index: 0xff }),
+    );
+
+    assert!(!state.current_mouse_unresponsive());
+}
+
+#[test]
+fn a_transient_device_keeps_its_presets_for_the_session() {
+    let mut state = state_with_a_known_mouse();
+    let record = DeviceRecord {
+        persistent: false,
+        ..state
+            .current_record()
+            .expect("the mouse is selected")
+            .clone()
+    };
+    state.devices.replace(vec![record], 0);
+    assert!(state.dpi_presets().is_empty());
+
+    let presets = vec![Dpi::new(800), Dpi::new(1600)];
+    let _ = state.commit_dpi_presets(presets.clone());
+    assert_eq!(state.dpi_presets(), presets);
+    let _ = state.commit_dpi_presets(vec![Dpi::new(800)]);
+    assert_eq!(state.dpi_presets(), vec![Dpi::new(800)]);
+}
+
+#[test]
+fn a_persistent_device_saves_its_presets_in_the_config() {
+    let mut state = state_with_a_known_mouse();
+    let presets = vec![Dpi::new(1200)];
+    let _ = state.commit_dpi_presets(presets.clone());
+    assert_eq!(state.dpi_presets(), presets);
+    assert!(state.pointer.session_dpi_presets.is_empty());
+}

@@ -184,6 +184,7 @@ fn camera_automation_preserves_manual_power_and_clears_transient_override() {
         }),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     };
     let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut state = AppState::new(Sources {
@@ -248,6 +249,7 @@ fn enabling_camera_automation_queues_effective_camera_power() {
         }),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     };
     let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut state = AppState::new(Sources {

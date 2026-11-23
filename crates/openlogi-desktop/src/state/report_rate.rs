@@ -86,6 +86,7 @@ impl AppState {
         let Some(route) = route else {
             return events;
         };
+        self.pointer.unresponsive_mice.remove(&device_key);
         self.pointer.reads.set_report_rate_ready(
             &device_key,
             &route,
@@ -118,10 +119,16 @@ impl AppState {
         result: Result<ReportRateInfo, WriteError>,
     ) -> StateEvents {
         let landed = match result {
-            Ok(info) => self.pointer.reads.set_report_rate_ready(key, route, info),
+            Ok(info) => {
+                self.pointer.unresponsive_mice.remove(key);
+                self.pointer.reads.set_report_rate_ready(key, route, info)
+            }
             Err(error) => {
                 let refreshed = self.pointer.reads.refresh_report_rate(key, route);
                 if refreshed {
+                    if matches!(error, WriteError::RawDeviceUnresponsive) {
+                        self.pointer.unresponsive_mice.insert(key.clone());
+                    }
                     warn!(%error, key = %key, "report-rate write did not land — re-reading the mouse");
                 }
                 refreshed

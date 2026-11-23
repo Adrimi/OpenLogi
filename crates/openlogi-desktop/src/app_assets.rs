@@ -10,6 +10,8 @@ use std::borrow::Cow;
 use gpui::{AssetSource, Result, SharedString};
 use openlogi_ui::action_icons::ActionIcons;
 
+use crate::services::known_devices::ZAOPIN_Z2_IMAGE;
+
 /// Asset path [`AppAssets`] resolves to the embedded app logo.
 pub const LOGO: &str = "openlogi.png";
 
@@ -25,6 +27,18 @@ const LOGO_BYTES: &[u8] = include_bytes!(concat!(
     "/../../design/icon/openlogi-512.png"
 ));
 
+/// Asset path of the generic mouse illustration used when no device render exists.
+pub const MOUSE_ART: &str = "device-art/wireless-mouse.svg";
+
+const MOUSE_ART_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/art/wireless-mouse.svg"
+));
+
+/// The Zaopin Z2 product photo, embedded into the binary.
+const ZAOPIN_Z2_BYTES: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/art/zaopin-z2.png"));
+
 /// GPUI asset source: the app logo, the shared ring glyphs, then
 /// gpui-component's bundled icons for everything else.
 pub struct AppAssets;
@@ -33,6 +47,12 @@ impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == LOGO {
             return Ok(Some(Cow::Borrowed(LOGO_BYTES)));
+        }
+        if path == MOUSE_ART {
+            return Ok(Some(Cow::Borrowed(MOUSE_ART_BYTES)));
+        }
+        if path == ZAOPIN_Z2_IMAGE {
+            return Ok(Some(Cow::Borrowed(ZAOPIN_Z2_BYTES)));
         }
         if let Some(bytes) = ActionIcons.load(path)? {
             return Ok(Some(bytes));
@@ -56,6 +76,7 @@ mod tests {
 
         for path in [
             openlogi_ui::action_icons::RING_CANCEL_ICON,
+            MOUSE_ART,
             "icons/check.svg",
             "icons/chevron-down.svg",
             crate::features::audio::AUDIO_ICON,

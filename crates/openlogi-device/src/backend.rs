@@ -148,6 +148,32 @@ pub trait RawWriter: Send + Sync {
     async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError>;
 }
 
+/// A raw report pair for request/response protocols the HID++ framing cannot
+/// model — the Compx mouse protocol, where every request is an output report
+/// and its reply arrives as an input report on the same collection.
+///
+/// Reads carry no correlation: the caller matches replies to requests and
+/// bounds each read with its own timeout, so `read_input_report` must be safe
+/// to cancel between reports.
+// Not `expect`: the lint is raised inside `async_trait`'s expansion, which rustc
+// does not credit to an expectation. Clippy 1.99 flags the `#[must_use]` the
+// macro puts on each boxed future; rust-clippy#17547 (1.100) stops linting
+// macro-generated code.
+#[expect(clippy::allow_attributes, reason = "see above")]
+#[allow(
+    clippy::double_must_use,
+    reason = "raised on `async_trait`'s generated methods, not on this source"
+)]
+#[async_trait]
+pub trait RawDuplex: Send + Sync {
+    /// Write one output report, report id included as the first byte.
+    async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError>;
+
+    /// Wait for the next input report and copy it into `buffer`, report id
+    /// first. Returns the number of bytes written.
+    async fn read_input_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError>;
+}
+
 /// The HID stack beneath OpenLogi's HID++ layer.
 ///
 /// One implementation per host HID API. Everything above it — enumeration
@@ -190,6 +216,19 @@ pub trait HidBackend: Send + Sync {
 
     /// Open `node` for raw output reports.
     async fn open_raw_writer(&self, node: &NodeInfo) -> Result<Box<dyn RawWriter>, BackendError>;
+
+    /// Open `node` for raw output reports and the input reports that answer
+    /// them.
+    ///
+    /// Only the host backend reaches real input reports. Scripted and replay
+    /// backends model HID++ traffic alone, so they keep this default, which
+    /// refuses the open rather than inventing replies.
+    async fn open_raw_duplex(&self, node: &NodeInfo) -> Result<Box<dyn RawDuplex>, BackendError> {
+        Err(BackendError::Backend(format!(
+            "this HID backend cannot exchange raw reports with {:04x}:{:04x}",
+            node.vendor_id, node.product_id
+        )))
+    }
 
     /// Subscribe to node connect/disconnect events.
     fn watch(&self) -> Result<HotplugStream, BackendError>;

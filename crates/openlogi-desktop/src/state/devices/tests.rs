@@ -1,6 +1,7 @@
 use openlogi_core::config::{Config, DeviceConfig, LinkConfig};
 use openlogi_core::device::{
-    DeviceInventory, PairedDevice, RawDeviceAddress, ReceiverInfo, StandaloneDevice,
+    BatteryInfo, BatteryLevel, BatteryStatus, DeviceInventory, PairedDevice, RawDeviceAddress,
+    ReceiverInfo, StandaloneDevice,
 };
 
 use crate::services::assets::AssetResolver;
@@ -372,6 +373,8 @@ fn mouse_identity(name: &str) -> DeviceIdentity {
             m_keys: false,
             macro_record: false,
             change_host: false,
+            onboard_dpi_stages: false,
+            mouse_settings: false,
         },
         light_capabilities: None,
         model_info: None,
@@ -401,6 +404,7 @@ fn standalone_registry_identity_is_preserved_without_hidpp_model_info() {
         light_capabilities: None,
         driver_id: "litra".into(),
         registry_model_id: Some("8c901".into()),
+        battery: None,
     };
     let list = build_device_list(
         &[],
@@ -418,6 +422,51 @@ fn standalone_registry_identity_is_preserved_without_hidpp_model_info() {
     // key, transport-free — not the route-embedded `raw:…` runtime key.
     assert_eq!(list[0].config_key, "serial:beam-1");
     assert!(list[0].asset.is_none());
+}
+
+#[test]
+fn standalone_mouse_carries_its_battery_and_measured_controls() {
+    let battery = BatteryInfo {
+        percentage: Some(20),
+        level: BatteryLevel::Low,
+        status: BatteryStatus::Discharging,
+    };
+    let device = StandaloneDevice {
+        address: RawDeviceAddress {
+            vendor_id: 0x3554,
+            product_id: 0xf524,
+            usage_page: 0xff05,
+            usage_id: 0x0000,
+            identity: "id:compx-node".into(),
+        },
+        display_name: "Zaopin Wireless Mouse".into(),
+        manufacturer: Some("Compx".into()),
+        serial_number: None,
+        unit_id: [0; 4],
+        kind: DeviceKind::Mouse,
+        online: true,
+        capabilities: Some(Capabilities {
+            pointer: true,
+            report_rate: true,
+            ..Capabilities::default()
+        }),
+        light_capabilities: None,
+        driver_id: "compx".into(),
+        registry_model_id: None,
+        battery: Some(battery.clone()),
+    };
+    let list = build_device_list(
+        &[],
+        std::slice::from_ref(&device),
+        &AssetResolver::new(),
+        &Config::default(),
+        &[],
+    );
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].battery, Some(battery));
+    let capabilities = list[0].capabilities.expect("measured capabilities");
+    assert!(capabilities.pointer && capabilities.report_rate);
 }
 
 #[test]

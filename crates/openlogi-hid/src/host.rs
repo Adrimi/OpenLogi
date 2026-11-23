@@ -339,9 +339,14 @@ pub fn channel_pool() -> ChannelPool {
     ChannelPool::with_backend(native_backend())
 }
 
-/// Enumerate this host's recognized standalone devices.
+/// Enumerate this host's recognized standalone devices, with the live state
+/// of any Compx mouse read in the same pass.
 pub async fn enumerate_standalone() -> Result<Vec<StandaloneDevice>, InventoryError> {
-    openlogi_device::inventory::standalone::enumerate_standalone(&*native_backend()).await
+    let backend = native_backend();
+    let mut devices =
+        openlogi_device::inventory::standalone::enumerate_standalone(&*backend).await?;
+    openlogi_device::compx::refresh_standalone(&*backend, &mut devices, &[]).await;
+    Ok(devices)
 }
 
 /// List the Logitech products this host shows while it offers no HID++ node.

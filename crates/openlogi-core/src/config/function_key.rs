@@ -50,6 +50,10 @@ pub enum FunctionKey {
     F18,
     /// F19.
     F19,
+    /// Insert (`kVK_Help` on macOS). A trigger can name it, but it sits
+    /// outside the laid-out row: it is not in [`Self::ALL`], so row geometry
+    /// and `nth_f` never reach it.
+    Insert,
 }
 
 impl FunctionKey {
@@ -77,6 +81,17 @@ impl FunctionKey {
         Self::F19,
     ];
 
+    /// Every key a trigger can name: the row, then [`Self::Insert`].
+    const TRIGGERABLE: [Self; 21] = {
+        let mut keys = [Self::Insert; 21];
+        let mut index = 0;
+        while index < Self::ALL.len() {
+            keys[index] = Self::ALL[index];
+            index += 1;
+        }
+        keys
+    };
+
     /// The macOS virtual keycode (`kVK_*`). Key events and triggers carry this
     /// keycode on every platform, so a config written on one host binds the
     /// same key on another.
@@ -103,16 +118,19 @@ impl FunctionKey {
             Self::F17 => 0x40,
             Self::F18 => 0x4F,
             Self::F19 => 0x50,
+            Self::Insert => 0x72,
         }
     }
 
     /// The key a macOS virtual keycode names, if it is on this row.
     #[must_use]
     pub fn from_keycode(keycode: u16) -> Option<Self> {
-        Self::ALL.into_iter().find(|key| key.keycode() == keycode)
+        Self::TRIGGERABLE
+            .into_iter()
+            .find(|key| key.keycode() == keycode)
     }
 
-    /// The name a trigger is written with: `esc`, `f1` … `f19`.
+    /// The name a trigger is written with: `esc`, `f1` … `f19`, `ins`.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -136,13 +154,18 @@ impl FunctionKey {
             Self::F17 => "f17",
             Self::F18 => "f18",
             Self::F19 => "f19",
+            Self::Insert => "ins",
         }
     }
 
-    /// The key a trigger name spells, case-insensitively.
+    /// The key a trigger name spells, case-insensitively. `insert` is an
+    /// alias of `ins`, kept because configs written before this table use it.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
+        if name.eq_ignore_ascii_case("insert") {
+            return Some(Self::Insert);
+        }
+        Self::TRIGGERABLE
             .into_iter()
             .find(|key| key.name().eq_ignore_ascii_case(name))
     }
@@ -171,6 +194,7 @@ impl FunctionKey {
             Self::F17 => "F17",
             Self::F18 => "F18",
             Self::F19 => "F19",
+            Self::Insert => "Ins",
         }
     }
 
@@ -209,6 +233,15 @@ mod tests {
         assert_eq!(FunctionKey::nth_f(0), None, "Esc is not an F key");
         assert_eq!(FunctionKey::nth_f(1), Some(FunctionKey::F1));
         assert_eq!(FunctionKey::nth_f(19), Some(FunctionKey::F19));
+        assert_eq!(FunctionKey::nth_f(20), None);
+    }
+
+    #[test]
+    fn insert_is_triggerable_but_outside_the_row() {
+        assert_eq!(FunctionKey::from_name("ins"), Some(FunctionKey::Insert));
+        assert_eq!(FunctionKey::from_name("Insert"), Some(FunctionKey::Insert));
+        assert_eq!(FunctionKey::from_keycode(0x72), Some(FunctionKey::Insert));
+        assert!(!FunctionKey::ALL.contains(&FunctionKey::Insert));
         assert_eq!(FunctionKey::nth_f(20), None);
     }
 

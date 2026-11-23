@@ -19,7 +19,8 @@ use std::future::Future;
 use openlogi_core::config::{ConfigRevision, Lighting};
 use openlogi_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, DisableKeysMask, DisableKeysState, Dpi, DpiInfo,
-    EasySwitchHosts, FnLockState, ForceSensingInfo, LightCommand, OnboardState, PointerSpeed,
+    EasySwitchHosts, FnLockState, ForceSensingInfo, LightCommand, MouseSettings,
+    MouseSettingsChange, OnboardDpiStages, OnboardDpiStagesChange, OnboardState, PointerSpeed,
     ReceiverSelector, ReportRate, ReportRateInfo, SidetoneLevel, SmartShiftStatus, WriteError,
 };
 use openlogi_ipc::{
@@ -204,6 +205,104 @@ impl Request for SetReportRate {
         let _ = updates.send(GuiUpdate::ReportRateWritten {
             key: self.key,
             route: self.route,
+            result: or_unavailable(outcome),
+        });
+    }
+}
+
+/// Replace the DPI stages a mouse stores, answered as
+/// [`GuiUpdate::OnboardDpiStagesWritten`] with what the mouse reads back.
+pub struct SetOnboardDpiStages {
+    pub route: DeviceRoute,
+    pub change: OnboardDpiStagesChange,
+    pub key: DeviceKey,
+}
+
+impl Request for SetOnboardDpiStages {
+    type Answer = Result<OnboardDpiStages, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        client
+            .set_onboard_dpi_stages(context::current(), self.route.clone(), self.change.clone())
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, updates: &UpdateSender) {
+        let _ = updates.send(GuiUpdate::OnboardDpiStagesWritten {
+            key: self.key,
+            result: or_unavailable(outcome),
+        });
+    }
+}
+
+/// Read the DPI stages a mouse stores, answered as
+/// [`GuiUpdate::OnboardDpiStagesRead`].
+pub struct ReadOnboardDpiStages {
+    pub route: DeviceRoute,
+    pub key: DeviceKey,
+}
+
+impl Request for ReadOnboardDpiStages {
+    type Answer = Result<OnboardDpiStages, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        client
+            .read_onboard_dpi_stages(context::current(), self.route.clone())
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, updates: &UpdateSender) {
+        let _ = updates.send(GuiUpdate::OnboardDpiStagesRead {
+            key: self.key,
+            result: or_unavailable(outcome),
+        });
+    }
+}
+
+/// Apply one change to the settings a mouse stores, answered as
+/// [`GuiUpdate::MouseSettingsWritten`] with what the mouse reads back.
+pub struct SetMouseSettings {
+    pub route: DeviceRoute,
+    pub change: MouseSettingsChange,
+    pub key: DeviceKey,
+}
+
+impl Request for SetMouseSettings {
+    type Answer = Result<MouseSettings, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        client
+            .set_mouse_settings(context::current(), self.route.clone(), self.change)
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, updates: &UpdateSender) {
+        let _ = updates.send(GuiUpdate::MouseSettingsWritten {
+            key: self.key,
+            result: or_unavailable(outcome),
+        });
+    }
+}
+
+/// Read the settings a mouse stores, answered as
+/// [`GuiUpdate::MouseSettingsRead`].
+pub struct ReadMouseSettings {
+    pub route: DeviceRoute,
+    pub key: DeviceKey,
+}
+
+impl Request for ReadMouseSettings {
+    type Answer = Result<MouseSettings, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        client
+            .read_mouse_settings(context::current(), self.route.clone())
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, updates: &UpdateSender) {
+        let _ = updates.send(GuiUpdate::MouseSettingsRead {
+            key: self.key,
             result: or_unavailable(outcome),
         });
     }
@@ -1168,6 +1267,8 @@ commands! {
     SetReportRate,
     SetPointerSpeed,
     SetSidetone,
+    SetOnboardDpiStages,
+    SetMouseSettings,
     SetForceSensing,
     SetBacklight,
     RenameEasySwitchHost,
@@ -1177,6 +1278,8 @@ commands! {
     ReadReportRate,
     ReadPointerSpeed,
     ReadSidetone,
+    ReadOnboardDpiStages,
+    ReadMouseSettings,
     ReadForceSensing,
     ReadBacklight,
     ReadEasySwitchHosts,

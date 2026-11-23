@@ -60,6 +60,8 @@ pub(crate) mod force_sensing;
 pub(crate) mod keypad_pages;
 mod light_adoption;
 mod lighting;
+mod mouse_settings;
+mod onboard_stages;
 mod os_layout;
 mod pointer_speed;
 mod profile_scope;
@@ -134,6 +136,7 @@ fn superseded_litra_light() -> StandaloneDevice {
         }),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     }
 }
 

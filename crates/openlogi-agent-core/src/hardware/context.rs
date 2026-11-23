@@ -3,8 +3,14 @@
 use std::sync::Arc;
 
 use openlogi_core::device::{LightState, StandaloneDevice};
-use openlogi_core::hid::{LightCommand, PairingError, WriteError};
+use openlogi_core::hid::dpi::{Dpi, DpiInfo};
+use openlogi_core::hid::report_rate::{ReportRate, ReportRateInfo};
+use openlogi_core::hid::{
+    LightCommand, MouseSettings, MouseSettingsChange, OnboardDpiStages, OnboardDpiStagesChange,
+    PairingError, WriteError,
+};
 use openlogi_hid::backend::{HidBackend, HotplugStream};
+use openlogi_hid::compx::KnownMouse;
 use openlogi_hid::inventory::persist::ProbeCacheStore;
 use openlogi_hid::pairing::ReceiverIdentityCache;
 use openlogi_hid::{
@@ -12,6 +18,13 @@ use openlogi_hid::{
     LightWatch, LitraModel, PairingCommand, PairingEvent, ReceiverSelector,
 };
 use tokio::sync::mpsc;
+
+/// One standalone enumeration: the devices, and what the pass learned about
+/// each Compx mouse for the next one.
+pub(crate) struct StandaloneScan {
+    pub(crate) devices: Vec<StandaloneDevice>,
+    pub(crate) compx: Vec<KnownMouse>,
+}
 
 /// One coherent source for every backend-dependent agent hardware service.
 ///
@@ -101,10 +114,75 @@ impl HardwareContext {
         openlogi_hid::inventory::hotplug::watch_hotplug(&*self.backend)
     }
 
+    /// Standalone devices, with the live state of any Compx mouse read in the
+    /// same pass so its battery and controls follow the inventory. `known` is
+    /// what the previous pass learned about those mice.
     pub(crate) async fn enumerate_standalone(
         &self,
-    ) -> Result<Vec<StandaloneDevice>, InventoryError> {
-        openlogi_hid::inventory::standalone::enumerate_standalone(&*self.backend).await
+        known: &[KnownMouse],
+    ) -> Result<StandaloneScan, InventoryError> {
+        let mut devices =
+            openlogi_hid::inventory::standalone::enumerate_standalone(&*self.backend).await?;
+        let compx =
+            openlogi_hid::compx::refresh_standalone(&*self.backend, &mut devices, known).await;
+        Ok(StandaloneScan { devices, compx })
+    }
+
+    pub(crate) async fn compx_dpi_info(&self, route: &DeviceRoute) -> Result<DpiInfo, WriteError> {
+        openlogi_hid::compx::read_dpi_info(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_dpi(
+        &self,
+        route: &DeviceRoute,
+        dpi: Dpi,
+    ) -> Result<(), WriteError> {
+        openlogi_hid::compx::set_dpi(&*self.backend, route, dpi).await
+    }
+
+    pub(crate) async fn compx_report_rate_info(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<ReportRateInfo, WriteError> {
+        openlogi_hid::compx::read_report_rate_info(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_report_rate(
+        &self,
+        route: &DeviceRoute,
+        rate: ReportRate,
+    ) -> Result<ReportRateInfo, WriteError> {
+        openlogi_hid::compx::set_report_rate(&*self.backend, route, rate).await
+    }
+
+    pub(crate) async fn compx_stages(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        openlogi_hid::compx::read_stages(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_stages(
+        &self,
+        route: &DeviceRoute,
+        change: &OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        openlogi_hid::compx::set_stages(&*self.backend, route, change).await
+    }
+
+    pub(crate) async fn compx_settings(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        openlogi_hid::compx::read_settings(&*self.backend, route).await
+    }
+
+    pub(crate) async fn compx_set_settings(
+        &self,
+        route: &DeviceRoute,
+        change: &MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        openlogi_hid::compx::set_settings(&*self.backend, route, change).await
     }
 
     pub(crate) async fn run_pairing(

@@ -22,6 +22,9 @@ use openlogi_agent_core::runtime::ActionDispatcher;
 use openlogi_core::binding::ActionRingSlot;
 use openlogi_core::config::{ConfigFile, ConfigRevision, Lighting};
 use openlogi_core::device::DeviceInventory;
+use openlogi_core::hid::{
+    MouseSettings, MouseSettingsChange, OnboardDpiStages, OnboardDpiStagesChange,
+};
 use openlogi_hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
     ForceSensingInfo, HapticRestore, HapticRestoreOutcome, HapticWaveform, HidppOperation,
@@ -331,6 +334,9 @@ impl Agent for AgentServer {
         _: Context,
         route: DeviceRoute,
     ) -> Result<ReportRateInfo, WriteError> {
+        if let Some(info) = self.shared.read_raw_report_rate(&route).await {
+            return info;
+        }
         self.shared
             .device(&route)
             .run(HidppOperation::ReadReportRate, |c| async move {
@@ -533,6 +539,40 @@ impl Agent for AgentServer {
         // A failed send is the designed steady state: the gate drops its
         // receiver at arming, and an armed agent no longer cares.
         let _ = self.demand.send(kind);
+    }
+
+    async fn read_onboard_dpi_stages(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        self.shared.read_onboard_dpi_stages(&route).await
+    }
+
+    async fn set_onboard_dpi_stages(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        change: OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError> {
+        self.shared.set_onboard_dpi_stages(&route, &change).await
+    }
+
+    async fn read_mouse_settings(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<MouseSettings, WriteError> {
+        self.shared.read_mouse_settings(&route).await
+    }
+
+    async fn set_mouse_settings(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        change: MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError> {
+        self.shared.set_mouse_settings(&route, &change).await
     }
 
     async fn request_input_monitoring_access(self, _: Context) {

@@ -58,12 +58,13 @@ impl AppState {
     /// editor in that state).
     pub fn commit_dpi_presets(&mut self, presets: Vec<Dpi>) -> StateEvents {
         let events = self.for_current_device(StateEvent::DpiChanged);
-        let Some(key) = self
-            .current_record()
-            .and_then(DeviceRecord::persistent_config_key)
-            .map(str::to_string)
-        else {
-            debug!("no persistent device key — DPI presets kept in memory only");
+        let Some(record) = self.current_record() else {
+            return events;
+        };
+        let Some(key) = record.persistent_config_key().map(str::to_string) else {
+            debug!("no persistent device key — DPI presets kept for this session only");
+            let device_key = record.device_key();
+            self.pointer.session_dpi_presets.insert(device_key, presets);
             return events;
         };
         self.config
@@ -75,10 +76,18 @@ impl AppState {
     /// when no device is selected. UI helper.
     #[must_use]
     pub fn dpi_presets(&self) -> Vec<Dpi> {
-        self.current_record()
-            .and_then(DeviceRecord::persistent_config_key)
-            .map(|key| self.config.dpi_presets(key))
-            .unwrap_or_default()
+        let Some(record) = self.current_record() else {
+            return Vec::new();
+        };
+        match record.persistent_config_key() {
+            Some(key) => self.config.dpi_presets(key),
+            None => self
+                .pointer
+                .session_dpi_presets
+                .get(&record.device_key())
+                .cloned()
+                .unwrap_or_default(),
+        }
     }
     /// The active device's known DPI: the live capability read once it
     /// completes, else the persisted config value, else [`DEFAULT_DPI`] for a
@@ -144,6 +153,7 @@ impl AppState {
             debug!(key = %key, "device unreachable — DPI change kept in memory only");
             return events;
         };
+        self.pointer.unresponsive_mice.remove(&key);
         let write = self.pointer.next_dpi_write;
         self.pointer.next_dpi_write = write.saturating_add(1);
         self.pointer.pending_dpi_writes.insert(key.clone(), write);
@@ -163,7 +173,9 @@ impl AppState {
     /// saved value again on reconnect. A failure saves nothing.
     /// [`WriteError::DpiNotApplied`] shows the DPI the device reports instead.
     /// [`WriteError::DpiUnsupported`] wrote nothing, so the device's last
-    /// known DPI is shown again. Any other failure also shows that value and
+    /// known DPI is shown again. [`WriteError::RawDeviceUnresponsive`], a
+    /// mouse that did not answer, also flags it for [`Self::current_mouse_unresponsive`].
+    /// Any other failure also shows that value and
     /// reads the device again, because the write may or may not have reached
     /// it.
     ///
@@ -189,13 +201,16 @@ impl AppState {
         // `None` shows the DPI the device is known to run at.
         let reported = match result {
             Ok(()) => {
+                self.pointer.unresponsive_mice.remove(key);
                 self.pointer.reads.set_dpi_current(key, dpi);
+                self.sync_onboard_active_dpi(key, dpi);
                 self.persist_dpi(key, dpi);
                 Some(dpi)
             }
             Err(WriteError::DpiNotApplied { actual, .. }) => {
                 warn!(key = %key, requested = %dpi, %actual, "device kept another DPI — not saving the request");
                 self.pointer.reads.set_dpi_current(key, actual);
+                self.sync_onboard_active_dpi(key, actual);
                 Some(actual)
             }
             Err(error @ WriteError::DpiUnsupported { .. }) => {
@@ -203,6 +218,9 @@ impl AppState {
                 None
             }
             Err(error) => {
+                if matches!(error, WriteError::RawDeviceUnresponsive) {
+                    self.pointer.unresponsive_mice.insert(key.clone());
+                }
                 warn!(%error, key = %key, requested = %dpi, "DPI write did not land — not saving it, re-reading the device");
                 self.pointer.reads.refresh_dpi(key);
                 None
@@ -232,6 +250,17 @@ impl AppState {
         self.config
             .edit(|config| config.set_dpi(&persistent_key, dpi));
         self.persist_and_reload("DPI");
+    }
+
+    /// Whether the active mouse did not answer its last DPI or report-rate
+    /// write at all.
+    #[must_use]
+    pub fn current_mouse_unresponsive(&self) -> bool {
+        self.current_record().is_some_and(|record| {
+            self.pointer
+                .unresponsive_mice
+                .contains(&record.device_key())
+        })
     }
 
     /// The DPI value currently shown by the active pointer editor.

@@ -20,7 +20,8 @@ use openlogi_core::device::{
 };
 use openlogi_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, DisableKeysMask, DisableKeysState, Dpi, DpiInfo,
-    EasySwitchHosts, FnLockState, ForceSensingInfo, LightCommand, OnboardState, PairingError,
+    EasySwitchHosts, FnLockState, ForceSensingInfo, LightCommand, MouseSettings,
+    MouseSettingsChange, OnboardDpiStages, OnboardDpiStagesChange, OnboardState, PairingError,
     PasskeyMethod, PointerSpeed, ReceiverSelector, ReportRate, ReportRateInfo, ScrollWheelMode,
     SidetoneLevel, SmartShiftStatus, WriteError,
 };
@@ -201,7 +202,21 @@ pub use succession::Identity;
 ///      [`Agent::request_input_monitoring_access`] appended — the GUI asks the
 ///      agent to raise the macOS Input Monitoring request;
 ///      `ActionRingIcon::MicOff` appended after `Channel3`.
-pub const PROTOCOL_VERSION: u32 = 47;
+/// v48: the Compx / Zaopin mouse family. `StandaloneDevice::battery`
+///      appended for Compx mice, and
+///      `WriteError::{RawDeviceUnresponsive, RawDeviceProtocol}` appended.
+///      `Capabilities::onboard_dpi_stages` appended — a mouse that stores its
+///      own DPI stages; `Agent::{read_onboard_dpi_stages,
+///      set_onboard_dpi_stages}` appended — those stages read and replaced
+///      from the settings app, with [`OnboardDpiStages`] and
+///      [`OnboardDpiStagesChange`]; `WriteError::OnboardDpiStagesNotApplied`
+///      appended.
+///      `Capabilities::mouse_settings` appended — a mouse that stores sensor,
+///      timing and lighting settings; `Agent::{read_mouse_settings,
+///      set_mouse_settings}` appended — those settings read, and one
+///      [`MouseSettingsChange`] applied, from the settings app, answering
+///      [`MouseSettings`]; `WriteError::MouseSettingNotApplied` appended.
+pub const PROTOCOL_VERSION: u32 = 48;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to
@@ -1278,4 +1293,38 @@ pub trait Agent {
     /// The GUI calls this only on macOS. Other platforms accept it as a no-op
     /// so the IPC contract stays portable.
     async fn request_input_monitoring_access();
+    /// Read the DPI stages stored on the mouse on `route` and its active
+    /// stage. Only mice whose `Capabilities::onboard_dpi_stages` is set have
+    /// them; any other route answers [`WriteError::FeatureUnsupported`].
+    ///
+    /// This method is appended to preserve the existing service-method order.
+    async fn read_onboard_dpi_stages(route: DeviceRoute) -> Result<OnboardDpiStages, WriteError>;
+    /// Replace the DPI stages stored on the mouse on `route` and activate
+    /// one, then answer with what the mouse reads back. A DPI the mouse
+    /// cannot store is refused with [`WriteError::DpiUnsupported`] before
+    /// anything is written, a list it does not hold (empty, or longer than
+    /// [`OnboardDpiStages::max_stages`]) with [`WriteError::RawDeviceProtocol`],
+    /// and a list it acknowledges but does not keep with
+    /// [`WriteError::OnboardDpiStagesNotApplied`].
+    ///
+    /// This method is appended to preserve the existing service-method order.
+    async fn set_onboard_dpi_stages(
+        route: DeviceRoute,
+        change: OnboardDpiStagesChange,
+    ) -> Result<OnboardDpiStages, WriteError>;
+    /// Read the sensor, timing and lighting settings stored on the mouse on
+    /// `route`. Only mice whose `Capabilities::mouse_settings` is set have
+    /// them; any other route answers [`WriteError::FeatureUnsupported`].
+    ///
+    /// This method is appended to preserve the existing service-method order.
+    async fn read_mouse_settings(route: DeviceRoute) -> Result<MouseSettings, WriteError>;
+    /// Apply one change to the settings stored on the mouse on `route` and
+    /// answer with what the mouse reads back; a change the mouse
+    /// acknowledges but does not keep is [`WriteError::MouseSettingNotApplied`].
+    ///
+    /// This method is appended to preserve the existing service-method order.
+    async fn set_mouse_settings(
+        route: DeviceRoute,
+        change: MouseSettingsChange,
+    ) -> Result<MouseSettings, WriteError>;
 }
